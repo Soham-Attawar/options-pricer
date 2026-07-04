@@ -1,0 +1,74 @@
+/* ============================================================
+   NIFTY OPTIONS PRICER - Stylesheet
+   ============================================================ */
+
+/* --- MAIN HEADER --- */
+.main-header {
+    background: linear-gradient(90deg, #1a1a2e, #16213e, #0f3460);
+    padding: 20px;
+    border-radius: 10px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.main-header h1 {
+    color: #e94560;
+    font-size: 2.5rem;
+    margin: 0;
+}
+
+.main-header p {
+    color: #a8b2d8;
+    font-size: 1rem;
+    margin: 5px 0 0 0;
+}
+
+/* --- METRIC CARDS --- */
+.metric-card {
+    background: #1a1a2e;
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid #e94560;
+}
+
+/* --- STREAMLIT METRICS --- */
+.stMetric {
+    background: #16213e;
+    padding: 10px;
+    border-radius: 8px;
+}
+
+/* --- SIDEBAR --- */
+.css-1d391kg {
+    background: #1a1a2e;
+}
+
+/* --- TABS --- */
+.stTabs [data-baseweb="tab"] {
+    color: #a8b2d8;
+    font-weight: 600;
+}
+
+.stTabs [aria-selected="true"] {
+    color: #e94560;
+    border-bottom: 2px solid #e94560;
+}
+
+/* --- BUTTONS --- */
+.stButton > button {
+    background: #e94560;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.stButton > button:hover {
+    background: #c73652;
+    color: white;
+}
+
+/* --- INFO BOXES --- */
+.stAlert {
+    border-radius: 8px;
+}
