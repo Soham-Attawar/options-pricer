@@ -83,10 +83,17 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### 📅 Expiry")
+    if index_choice == "Nifty 50":
+        expiry_options = ["Weekly", "Monthly"]
+        expiry_help = "Nifty: Weekly=Tuesday | Monthly=Last Tuesday of month"
+    else:
+        expiry_options = ["Monthly"]
+        expiry_help = "BankNifty: Only monthly expiry available (last Tuesday)"
+
     expiry_type = st.radio(
         "Select Expiry Type",
-        ["Weekly", "Monthly"],
-        help="Nifty: Weekly=Thursday | BankNifty: Weekly=Wednesday"
+        expiry_options,
+        help=expiry_help
     )
 
     if expiry_type == "Weekly":
