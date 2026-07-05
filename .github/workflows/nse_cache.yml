@@ -1,0 +1,31 @@
+name: NSE Cache Updater
+
+on:
+  schedule:
+    # Run every 5 minutes Mon-Fri during market hours
+    # IST 9:15am = UTC 3:45am, IST 3:30pm = UTC 10:00am
+    - cron: '*/5 3-10 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger from GitHub
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        pip install requests numpy yfinance
+
+    - name: Run NSE Cache
+      env:
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      run: |
+        python nse_cache_github.py
