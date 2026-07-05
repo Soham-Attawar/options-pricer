@@ -38,7 +38,7 @@ st.set_page_config(
     page_title="Nifty Options Pricer",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # --- LOAD CSS ---
@@ -47,6 +47,30 @@ def load_css(file_name):
         st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
 
 load_css("styles.css")
+
+# --- MOBILE FIX CSS ---
+st.markdown("""
+    <style>
+    /* Hide sidebar on mobile after calculate */
+    @media (max-width: 768px) {
+        .css-1d391kg {
+            display: none;
+        }
+        .css-1lcbmhc {
+            display: none;
+        }
+        [data-testid="collapsedControl"] {
+            display: block;
+        }
+    }
+    /* Make metrics stack better on mobile */
+    @media (max-width: 768px) {
+        [data-testid="metric-container"] {
+            width: 100% !important;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- HEADER ---
 st.markdown("""
@@ -81,6 +105,7 @@ with st.spinner("Fetching live market data..."):
         monthly_date, monthly_T, monthly_days = get_monthly_expiry()
         index_name = "Nifty 50"
         nse_symbol = "NIFTY"
+        lot_size = 65
     else:
         S0 = get_banknifty_price()
         sigma_historical = get_banknifty_volatility()
@@ -89,6 +114,7 @@ with st.spinner("Fetching live market data..."):
         monthly_date, monthly_T, monthly_days = get_monthly_expiry()
         index_name = "BankNifty"
         nse_symbol = "BANKNIFTY"
+        lot_size = 30
 
 # --- SIDEBAR PART 2 - Rest of inputs ---
 with st.sidebar:
@@ -144,6 +170,27 @@ with st.sidebar:
         st.markdown(f"📊 Strike is **₹{distance:.0f} ({distance_pct:.1f}%) above** current price")
     else:
         st.markdown(f"📊 Strike is **₹{abs(distance):.0f} ({abs(distance_pct):.1f}%) below** current price")
+
+    st.markdown("---")
+
+    # --- POSITION SIZING IN SIDEBAR ---
+    st.markdown("### 💰 Position Sizing")
+    account_size = st.number_input(
+        "Account Size (₹)",
+        min_value=10000,
+        max_value=10000000,
+        value=500000,
+        step=10000,
+        help="Your total trading capital"
+    )
+    risk_percent = st.slider(
+        "Risk per trade (%)",
+        min_value=0.5,
+        max_value=5.0,
+        value=2.0,
+        step=0.5,
+        help="What % of your account are you willing to risk?"
+    )
 
     st.markdown("---")
     calculate = st.button("🚀 Calculate Option Price", type="primary", use_container_width=True)
@@ -271,6 +318,33 @@ if calculate:
 
     st.markdown("---")
 
+    # --- POSITION SIZING CALCULATOR ---
+    st.markdown("### 🎯 Position Sizing Calculator")
+    st.markdown("*How many lots should you buy based on your risk tolerance?*")
+
+    # Use live NSE call price if available
+    option_premium = nse_call['lastPrice'] if nse_call and nse_call['lastPrice'] > 0 else results['call_price']
+
+    # Calculate position sizing
+    max_risk_rupees = account_size * (risk_percent / 100)
+    cost_per_lot = option_premium * lot_size
+    max_lots = int(max_risk_rupees / cost_per_lot) if cost_per_lot > 0 else 0
+    total_cost = max_lots * cost_per_lot
+    breakeven_price = K + option_premium
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Max Lots to Buy", f"{max_lots} lots")
+    col2.metric("Total Premium Cost", f"₹{total_cost:,.2f}")
+    col3.metric("Max Loss", f"₹{total_cost:,.2f}", f"{risk_percent}% of account")
+    col4.metric("Breakeven Price", f"₹{breakeven_price:,.2f}")
+
+    if max_lots > 0:
+        st.success(f"✅ Buy maximum **{max_lots} lots** of {index_name} {K} CE — Total cost ₹{total_cost:,.2f} — Max loss ₹{total_cost:,.2f} ({risk_percent}% of your ₹{account_size:,} account)")
+    else:
+        st.warning(f"⚠️ Need at least ₹{cost_per_lot:,.2f} ({(cost_per_lot/account_size*100):.1f}% of account) for 1 lot. Increase account size or reduce strike price.")
+
+    st.markdown("---")
+
     # --- TABS ---
     tab1, tab2, tab3 = st.tabs(["📈 Price Paths", "💹 Payoff Diagram", "⚠️ Risk Analysis"])
 
@@ -365,6 +439,7 @@ else:
         1. Select Nifty 50 or BankNifty in the sidebar
         2. Select Weekly or Monthly expiry
         3. Enter your desired strike price
-        4. Click Calculate — live NSE prices fetched automatically
-        5. View pricing, Greeks, payoff diagram and risk analysis
+        4. Set your account size and risk tolerance
+        5. Click Calculate — live NSE prices fetched automatically
+        6. View pricing, Greeks, position sizing, payoff diagram and risk analysis
     """)
