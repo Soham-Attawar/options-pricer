@@ -138,8 +138,9 @@ def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'
     try:
         from supabase import create_client
 
-        SUPABASE_URL = "https://mmmkqwuvzdysetroovhv.supabase.co"
-        SUPABASE_KEY = "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O"
+        import os
+        SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
+        SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O")
 
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
