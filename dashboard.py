@@ -31,6 +31,7 @@ get_banknifty_expiry = market_data.get_banknifty_expiry
 get_india_vix = market_data.get_india_vix
 get_nse_option_price = market_data.get_nse_option_price
 convert_date_to_nse_format = market_data.convert_date_to_nse_format
+get_option_price_from_supabase = market_data.get_option_price_from_supabase
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -174,7 +175,6 @@ if calculate:
     with st.spinner("Running Monte Carlo simulation..."):
         r = 0.065
 
-        # Calculate IV separately for call and put
         iv_call = None
         iv_put = None
         data_source = "historical"
@@ -191,7 +191,6 @@ if calculate:
             )
             data_source = "live"
 
-        # Choose sigma for fallback
         if iv_call:
             sigma_to_use = iv_call
         elif iv_put:
@@ -203,15 +202,16 @@ if calculate:
             sigma_to_use = sigma
             data_source = "historical"
 
-        # Price options — use separate IV if both available
         if data_source == "live" and iv_call and iv_put:
             results = price_option_with_separate_iv(
                 S0, K, T, r, iv_call, iv_put, paths
             )
-            vol_source = f"Live NSE — Call IV: {iv_call*100:.2f}% | Put IV: {iv_put*100:.2f}%"
+            call_iv_str = f"{iv_call*100:.2f}%"
+            put_iv_str = f"{iv_put*100:.2f}%"
+            vol_source = f"Call IV: {call_iv_str} | Put IV: {put_iv_str}"
         elif data_source == "live":
             results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
-            vol_source = f"Live NSE — IV: {sigma_to_use*100:.2f}%"
+            vol_source = f"IV: {sigma_to_use*100:.2f}%"
         elif data_source == "vix":
             results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
             vol_source = f"India VIX ({india_vix*100:.2f}%) adjusted for skew: {sigma_to_use*100:.2f}%"
@@ -221,7 +221,12 @@ if calculate:
 
     # Show data source
     if data_source == "live":
-        st.success(f"✅ {vol_source}")
+        nse_source = nse_call.get('source', 'live') if nse_call else 'unknown'
+        if nse_source == 'supabase':
+            updated = nse_call.get('updated_at', '')[:16] if nse_call else ''
+            st.info(f"📊 Using Supabase cache — {vol_source} (last updated: {updated})")
+        else:
+            st.success(f"✅ Live NSE data — {vol_source}")
     elif data_source == "vix":
         st.info(f"📊 {vol_source} (NSE data unavailable)")
     else:
