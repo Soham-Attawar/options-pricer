@@ -132,37 +132,44 @@ def get_nse_option_chain(symbol="NIFTY"):
 
 def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'):
     """
-    Fetch option price from Supabase cache
+    Fetch option price from Supabase cache using REST API
     Used as fallback when NSE direct fetch fails
     """
     try:
-        from supabase import create_client
-
         import os
         SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
         SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O")
 
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {SUPABASE_KEY}',
+            'Content-Type': 'application/json'
+        }
 
-        result = supabase.table("option_chain")\
-            .select("*")\
-            .eq("symbol", symbol)\
-            .eq("strike", float(strike))\
-            .eq("expiry_date", expiry_date)\
-            .eq("option_type", option_type)\
-            .execute()
+        params = {
+            'symbol': f'eq.{symbol}',
+            'strike': f'eq.{float(strike)}',
+            'expiry_date': f'eq.{expiry_date}',
+            'option_type': f'eq.{option_type}',
+            'select': '*'
+        }
 
-        if result.data and len(result.data) > 0:
-            row = result.data[0]
-            return {
-                'lastPrice': float(row['last_price']),
-                'openInterest': int(row['open_interest']),
-                'volume': int(row['volume']),
-                'change': float(row['change']),
-                'pchange': float(row['pchange']),
-                'updated_at': row['updated_at'],
-                'source': 'supabase'
-            }
+        url = f"{SUPABASE_URL}/rest/v1/option_chain"
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            if data and len(data) > 0:
+                row = data[0]
+                return {
+                    'lastPrice': float(row['last_price']),
+                    'openInterest': int(row['open_interest']),
+                    'volume': int(row['volume']),
+                    'change': float(row['change']),
+                    'pchange': float(row['pchange']),
+                    'updated_at': row['updated_at'],
+                    'source': 'supabase'
+                }
         return None
 
     except Exception as e:
