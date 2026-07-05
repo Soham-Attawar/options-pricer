@@ -2,10 +2,8 @@ name: NSE Cache Updater
 
 on:
   schedule:
-    # Run every 5 minutes Mon-Fri during market hours
-    # IST 9:15am = UTC 3:45am, IST 3:30pm = UTC 10:00am
     - cron: '*/5 3-10 * * 1-5'
-  workflow_dispatch:  # Allow manual trigger from GitHub
+  workflow_dispatch:
 
 jobs:
   update-cache:
@@ -21,7 +19,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install requests numpy yfinance
+        pip install requests nse httpx[http2]
 
     - name: Run NSE Cache
       env:

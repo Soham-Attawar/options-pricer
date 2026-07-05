@@ -1,55 +1,40 @@
 # ============================================================
-# NSE CACHE - GitHub Actions version
-# Fetches NSE data and saves to Supabase
+# NSE CACHE - GitHub Actions version using NseIndiaApi
 # ============================================================
 
 import requests
 import os
 import json
 from datetime import datetime
+from nse import NSE
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
 def get_nse_option_chain(symbol="NIFTY"):
-    """Fetch NSE option chain"""
+    """Fetch NSE option chain using NseIndiaApi with server=True"""
     try:
-        session = requests.Session()
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Referer': 'https://www.nseindia.com/option-chain',
-            'Connection': 'keep-alive',
-        }
-
-        print(f"Fetching {symbol} from NSE...")
-        session.get('https://www.nseindia.com', headers=headers, timeout=15)
-        session.get('https://www.nseindia.com/option-chain', headers=headers, timeout=15)
-
-        url = f'https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolDerivativesData&symbol={symbol}'
-        response = session.get(url, headers=headers, timeout=15)
-
-        print(f"NSE response status: {response.status_code}")
-
-        if response.status_code == 200:
-            data = response.json()
-            chain = data.get('data', [])
-            print(f"Got {len(chain)} entries for {symbol}")
-            return chain
-        else:
-            print(f"NSE returned: {response.text[:200]}")
+        print(f"Fetching {symbol} from NSE using NseIndiaApi...")
+        
+        with NSE(download_folder='./', server=True) as nse:
+            data = nse.optionChain(symbol=symbol.lower())
+            
+        if not data or 'records' not in data:
+            print(f"No data returned for {symbol}")
             return []
+            
+        records = data['records']['data']
+        print(f"Got {len(records)} records for {symbol}")
+        return records
 
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return []
 
 
-def save_to_supabase(symbol, chain):
+def save_to_supabase(symbol, records):
     """Save option chain to Supabase"""
-    if not chain:
+    if not records:
         print(f"No data to save for {symbol}")
         return
 
@@ -68,24 +53,50 @@ def save_to_supabase(symbol, chain):
     )
     print(f"Delete old data: status {delete_response.status_code}")
 
-    # Prepare rows
+    # Prepare rows from NseIndiaApi format
     rows = []
-    for entry in chain:
-        try:
-            rows.append({
-                "symbol": symbol,
-                "strike": float(entry['strikePrice'].strip()),
-                "expiry_date": entry['expiryDate'],
-                "option_type": entry['optionType'],
-                "last_price": float(entry['lastPrice']),
-                "open_interest": int(entry['openInterest']),
-                "volume": int(entry['totalTradedVolume']),
-                "change": float(entry['change']),
-                "pchange": float(entry['pchange']),
-                "updated_at": datetime.now().isoformat()
-            })
-        except Exception as e:
-            continue
+    for record in records:
+        expiry = record.get('expiryDates', '')
+
+        # Process CE (Call)
+        if 'CE' in record and record['CE']:
+            ce = record['CE']
+            try:
+                rows.append({
+                    "symbol": symbol,
+                    "strike": float(ce.get('strikePrice', 0)),
+                    "expiry_date": expiry,
+                    "option_type": "CE",
+                    "last_price": float(ce.get('lastPrice', 0)),
+                    "open_interest": int(ce.get('openInterest', 0)),
+                    "volume": int(ce.get('totalTradedVolume', 0)),
+                    "change": float(ce.get('change', 0)),
+                    "pchange": float(ce.get('pChange', 0)),
+                    "implied_volatility": float(ce.get('impliedVolatility', 0)),
+                    "updated_at": datetime.now().isoformat()
+                })
+            except:
+                continue
+
+        # Process PE (Put)
+        if 'PE' in record and record['PE']:
+            pe = record['PE']
+            try:
+                rows.append({
+                    "symbol": symbol,
+                    "strike": float(pe.get('strikePrice', 0)),
+                    "expiry_date": expiry,
+                    "option_type": "PE",
+                    "last_price": float(pe.get('lastPrice', 0)),
+                    "open_interest": int(pe.get('openInterest', 0)),
+                    "volume": int(pe.get('totalTradedVolume', 0)),
+                    "change": float(pe.get('change', 0)),
+                    "pchange": float(pe.get('pChange', 0)),
+                    "implied_volatility": float(pe.get('impliedVolatility', 0)),
+                    "updated_at": datetime.now().isoformat()
+                })
+            except:
+                continue
 
     print(f"Prepared {len(rows)} rows for {symbol}")
 
@@ -105,21 +116,15 @@ def save_to_supabase(symbol, chain):
 
 # --- MAIN ---
 print(f"NSE Cache GitHub Actions — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-print(f"SUPABASE_URL: {SUPABASE_URL[:30] if SUPABASE_URL else 'NOT SET'}...")
+print(f"SUPABASE_URL: {'SET' if SUPABASE_URL else 'NOT SET'}")
 print(f"SUPABASE_KEY: {'SET' if SUPABASE_KEY else 'NOT SET'}")
 
-# Fetch and save NIFTY
-nifty_chain = get_nse_option_chain("NIFTY")
-if nifty_chain:
-    save_to_supabase("NIFTY", nifty_chain)
-else:
-    print("NIFTY fetch failed — NSE might be blocking GitHub IPs")
+nifty_records = get_nse_option_chain("NIFTY")
+if nifty_records:
+    save_to_supabase("NIFTY", nifty_records)
 
-# Fetch and save BANKNIFTY
-banknifty_chain = get_nse_option_chain("BANKNIFTY")
-if banknifty_chain:
-    save_to_supabase("BANKNIFTY", banknifty_chain)
-else:
-    print("BANKNIFTY fetch failed — NSE might be blocking GitHub IPs")
+banknifty_records = get_nse_option_chain("BANKNIFTY")
+if banknifty_records:
+    save_to_supabase("BANKNIFTY", banknifty_records)
 
 print("Done!")
