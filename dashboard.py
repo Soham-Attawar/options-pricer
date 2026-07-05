@@ -10,9 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import streamlit as st
 import numpy as np
 import matplotlib.pyplot as plt
-from core import price_option
-
 import importlib
+import core as core_module
+importlib.reload(core_module)
+price_option = core_module.price_option
+price_option_with_separate_iv = core_module.price_option_with_separate_iv
+calculate_implied_volatility = core_module.calculate_implied_volatility
+adjust_iv_for_skew = core_module.adjust_iv_for_skew
+
 import market_data
 importlib.reload(market_data)
 
@@ -23,6 +28,9 @@ get_monthly_expiry = market_data.get_monthly_expiry
 get_banknifty_price = market_data.get_banknifty_price
 get_banknifty_volatility = market_data.get_banknifty_volatility
 get_banknifty_expiry = market_data.get_banknifty_expiry
+get_india_vix = market_data.get_india_vix
+get_nse_option_price = market_data.get_nse_option_price
+convert_date_to_nse_format = market_data.convert_date_to_nse_format
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -56,30 +64,39 @@ with st.sidebar:
     index_choice = st.radio(
         "Choose Index",
         ["Nifty 50", "BankNifty"],
-        help="Nifty 50 expires Thursday, BankNifty expires Wednesday"
+        help="Nifty 50 expires Tuesday, BankNifty expires last Tuesday of month"
     )
     st.markdown("---")
 
 # --- FETCH MARKET DATA ---
 with st.spinner("Fetching live market data..."):
+    india_vix = get_india_vix()
+
     if index_choice == "Nifty 50":
         S0 = get_nifty_price()
-        sigma = get_nifty_volatility()
+        sigma_historical = get_nifty_volatility()
+        sigma = india_vix if india_vix else sigma_historical
         weekly_date, weekly_T, weekly_days = get_next_expiry()
         monthly_date, monthly_T, monthly_days = get_monthly_expiry()
         index_name = "Nifty 50"
+        nse_symbol = "NIFTY"
     else:
         S0 = get_banknifty_price()
-        sigma = get_banknifty_volatility()
+        sigma_historical = get_banknifty_volatility()
+        sigma = india_vix if india_vix else sigma_historical
         weekly_date, weekly_T, weekly_days = get_banknifty_expiry()
         monthly_date, monthly_T, monthly_days = get_monthly_expiry()
         index_name = "BankNifty"
+        nse_symbol = "BANKNIFTY"
 
 # --- SIDEBAR PART 2 - Rest of inputs ---
 with st.sidebar:
     st.markdown(f"### 🏦 {index_name}")
     st.markdown(f"## ₹{S0:,.2f}")
-    st.markdown(f"Volatility: **{sigma*100:.2f}%** | RBI Rate: **6.5%**")
+    if india_vix:
+        st.markdown(f"India VIX: **{india_vix*100:.2f}%** | RBI Rate: **6.5%**")
+    else:
+        st.markdown(f"Volatility: **{sigma*100:.2f}%** | RBI Rate: **6.5%**")
     st.markdown("---")
 
     st.markdown("### 📅 Expiry")
@@ -134,7 +151,11 @@ with st.sidebar:
 st.markdown("### 📊 Live Market Data")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric(f"{index_name} Price", f"₹{S0:,.2f}")
-col2.metric("Historical Volatility", f"{sigma*100:.2f}%")
+if india_vix:
+    col2.metric("India VIX", f"{india_vix*100:.2f}%",
+                help="NSE official volatility index")
+else:
+    col2.metric("Historical Volatility", f"{sigma_historical*100:.2f}%")
 col3.metric("Risk Free Rate (RBI)", "6.5%")
 col4.metric("Days to Expiry", f"{days_remaining} days")
 
@@ -143,8 +164,68 @@ st.markdown("---")
 # --- MAIN CONTENT ---
 if calculate:
 
+    # --- FETCH LIVE NSE OPTION PRICES ---
+    nse_expiry = convert_date_to_nse_format(expiry_date)
+
+    with st.spinner("Fetching live NSE option prices..."):
+        nse_call = get_nse_option_price(nse_symbol, K, nse_expiry, "CE")
+        nse_put = get_nse_option_price(nse_symbol, K, nse_expiry, "PE")
+
     with st.spinner("Running Monte Carlo simulation..."):
-        results = price_option(S0, K, T, r=0.065, sigma=sigma, paths=paths)
+        r = 0.065
+
+        # Calculate IV separately for call and put
+        iv_call = None
+        iv_put = None
+        data_source = "historical"
+
+        if nse_call and nse_call['lastPrice'] > 0:
+            iv_call = calculate_implied_volatility(
+                nse_call['lastPrice'], S0, K, T, r, option_type='call'
+            )
+            data_source = "live"
+
+        if nse_put and nse_put['lastPrice'] > 0:
+            iv_put = calculate_implied_volatility(
+                nse_put['lastPrice'], S0, K, T, r, option_type='put'
+            )
+            data_source = "live"
+
+        # Choose sigma for fallback
+        if iv_call:
+            sigma_to_use = iv_call
+        elif iv_put:
+            sigma_to_use = iv_put
+        elif india_vix:
+            sigma_to_use = adjust_iv_for_skew(india_vix, S0, K, T)
+            data_source = "vix"
+        else:
+            sigma_to_use = sigma
+            data_source = "historical"
+
+        # Price options — use separate IV if both available
+        if data_source == "live" and iv_call and iv_put:
+            results = price_option_with_separate_iv(
+                S0, K, T, r, iv_call, iv_put, paths
+            )
+            vol_source = f"Live NSE — Call IV: {iv_call*100:.2f}% | Put IV: {iv_put*100:.2f}%"
+        elif data_source == "live":
+            results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
+            vol_source = f"Live NSE — IV: {sigma_to_use*100:.2f}%"
+        elif data_source == "vix":
+            results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
+            vol_source = f"India VIX ({india_vix*100:.2f}%) adjusted for skew: {sigma_to_use*100:.2f}%"
+        else:
+            results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
+            vol_source = f"Historical volatility: {sigma_to_use*100:.2f}%"
+
+    # Show data source
+    if data_source == "live":
+        st.success(f"✅ {vol_source}")
+    elif data_source == "vix":
+        st.info(f"📊 {vol_source} (NSE data unavailable)")
+    else:
+        st.warning(f"⚠️ {vol_source} (NSE data and VIX unavailable)")
 
     # --- OPTION PRICES ---
     st.markdown("### 💰 Option Prices")
@@ -155,12 +236,24 @@ if calculate:
         st.metric("Monte Carlo Price", f"₹{results['call_price']:.2f}")
         st.metric("Black-Scholes Price", f"₹{results['BS_call']:.2f}")
         st.metric("Difference", f"₹{abs(results['BS_call'] - results['call_price']):.2f}")
+        if nse_call and nse_call['lastPrice'] > 0:
+            st.metric("NSE Market Price", f"₹{nse_call['lastPrice']:.2f}")
+            st.metric("OI", f"{nse_call['openInterest']:,}")
+            st.metric("Volume", f"{nse_call['volume']:,}")
+        if iv_call:
+            st.metric("Call IV", f"{iv_call*100:.2f}%")
 
     with col2:
         st.markdown("#### 📕 Put Option")
         st.metric("Monte Carlo Price", f"₹{results['put_price']:.2f}")
         st.metric("Black-Scholes Price", f"₹{results['BS_put']:.2f}")
         st.metric("Difference", f"₹{abs(results['BS_put'] - results['put_price']):.2f}")
+        if nse_put and nse_put['lastPrice'] > 0:
+            st.metric("NSE Market Price", f"₹{nse_put['lastPrice']:.2f}")
+            st.metric("OI", f"{nse_put['openInterest']:,}")
+            st.metric("Volume", f"{nse_put['volume']:,}")
+        if iv_put:
+            st.metric("Put IV", f"{iv_put*100:.2f}%")
 
     # --- GREEKS ---
     st.markdown("### 🔢 Greeks")
@@ -267,6 +360,6 @@ else:
         1. Select Nifty 50 or BankNifty in the sidebar
         2. Select Weekly or Monthly expiry
         3. Enter your desired strike price
-        4. Click Calculate Option Price
+        4. Click Calculate — live NSE prices fetched automatically
         5. View pricing, Greeks, payoff diagram and risk analysis
     """)
