@@ -248,6 +248,58 @@ def get_nse_strikes(symbol="NIFTY", expiry_date=None):
     except Exception as e:
         print(f"NSE strikes fetch error: {e}")
         return []
+    
+def get_market_status():
+    """
+    Check if NSE market is currently open
+    Market hours: 9:15am - 3:30pm IST, Mon-Fri
+    """
+    try:
+        import pytz
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+
+        # Weekend check
+        if now.weekday() >= 5:
+            return {
+                'is_open': False,
+                'status': '🔴 Market Closed',
+                'message': 'Market reopens Monday 9:15am IST',
+                'color': 'red'
+            }
+
+        # Market hours check
+        market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+        if market_open <= now <= market_close:
+            return {
+                'is_open': True,
+                'status': '🟢 Market Open',
+                'message': f'Closes at 3:30pm IST',
+                'color': 'green'
+            }
+        elif now < market_open:
+            return {
+                'is_open': False,
+                'status': '🟡 Market Opens Soon',
+                'message': f'Opens at 9:15am IST today',
+                'color': 'yellow'
+            }
+        else:
+            return {
+                'is_open': False,
+                'status': '🔴 Market Closed',
+                'message': 'Market reopens tomorrow 9:15am IST',
+                'color': 'red'
+            }
+    except:
+        return {
+            'is_open': False,
+            'status': '⚪ Market Status Unknown',
+            'message': '',
+            'color': 'gray'
+        }
 
 
 if __name__ == "__main__":
