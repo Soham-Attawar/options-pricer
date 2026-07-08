@@ -249,6 +249,56 @@ def get_nse_strikes(symbol="NIFTY", expiry_date=None):
         print(f"NSE strikes fetch error: {e}")
         return []
     
+
+def get_finnifty_price():
+    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
+    data = finnifty.history(period="1d")
+    if data.empty:
+        data = finnifty.history(period="5d")
+    if data.empty:
+        return None  # return None instead of hardcoded value
+    return round(data['Close'].iloc[-1], 2)
+
+
+def get_finnifty_volatility():
+    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
+    data = finnifty.history(period="1y")
+    if data.empty:
+        return None
+    daily_returns = data['Close'].pct_change().dropna()
+    annual_volatility = daily_returns.std() * np.sqrt(252)
+    return round(annual_volatility, 4)
+
+
+def get_midcap_price():
+    midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
+    data = midcap.history(period="1d")
+    if data.empty:
+        data = midcap.history(period="5d")
+    if data.empty:
+        return None
+    return round(data['Close'].iloc[-1], 2)
+
+
+def get_midcap_volatility():
+    """
+    Try to get MidcapNifty historical volatility
+    Falls back to India VIX if not enough data available
+    """
+    try:
+        midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
+        data = midcap.history(period="1y")
+        if data.empty or len(data) < 30:
+            # Not enough data — use India VIX as proxy
+            return get_india_vix()
+        daily_returns = data['Close'].pct_change().dropna()
+        if daily_returns.empty or daily_returns.std() == 0:
+            return get_india_vix()
+        annual_volatility = daily_returns.std() * np.sqrt(252)
+        return round(annual_volatility, 4)
+    except:
+        return get_india_vix()
+    
 def get_market_status():
     """
     Check if NSE market is currently open
@@ -348,3 +398,14 @@ if __name__ == "__main__":
         print(f"Supabase result: ₹{sb_result['lastPrice']} (updated: {sb_result['updated_at'][:16]})")
     else:
         print("Supabase fallback failed")
+
+    # Test FinNifty and MidcapNifty
+    finnifty_price = get_finnifty_price()
+    finnifty_vol = get_finnifty_volatility()
+    midcap_price = get_midcap_price()
+    midcap_vol = get_midcap_volatility()
+
+    print(f"\nFinNifty Price:      ₹{finnifty_price}")
+    print(f"FinNifty Volatility: {finnifty_vol*100:.2f}%")
+    print(f"MidcapNifty Price:      ₹{midcap_price}")
+    print(f"MidcapNifty Volatility: {midcap_vol*100:.2f}%" if midcap_vol else "MidcapNifty Volatility: unavailable")

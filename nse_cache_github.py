@@ -153,4 +153,14 @@ banknifty_rows = get_nse_option_chain_all_expiries("BANKNIFTY")
 if banknifty_rows:
     save_to_supabase("BANKNIFTY", banknifty_rows)
 
+# Fetch and save FINNIFTY all expiries
+finnifty_rows = get_nse_option_chain_all_expiries("FINNIFTY")
+if finnifty_rows:
+    save_to_supabase("FINNIFTY", finnifty_rows)
+
+# Fetch and save MIDCPNIFTY all expiries
+midcap_rows = get_nse_option_chain_all_expiries("MIDCPNIFTY")
+if midcap_rows:
+    save_to_supabase("MIDCPNIFTY", midcap_rows)
+
 print("Done!")
