@@ -6,6 +6,7 @@ import yfinance as yf
 import numpy as np
 import requests
 from datetime import datetime, timedelta
+import pytz
 
 
 def get_nifty_price():
@@ -14,14 +15,18 @@ def get_nifty_price():
     if data.empty:
         data = nifty.history(period="5d")
     if data.empty:
-        return 24056.0
+        return None
     return round(data['Close'].iloc[-1], 2)
 
 
 def get_nifty_volatility():
     nifty = yf.Ticker("^NSEI")
     data = nifty.history(period="1y")
+    if data.empty:
+        return None
     daily_returns = data['Close'].pct_change().dropna()
+    if daily_returns.empty or daily_returns.std() == 0:
+        return None
     annual_volatility = daily_returns.std() * np.sqrt(252)
     return round(annual_volatility, 4)
 
@@ -40,7 +45,7 @@ def get_india_vix():
 
 
 def get_next_expiry():
-    # Nifty 50 weekly options expire every Tuesday
+    # Nifty 50 weekly options expire every Tuesday (weekday 1)
     today = datetime.now()
     days_until_tuesday = (1 - today.weekday()) % 7
     if days_until_tuesday == 0:
@@ -75,20 +80,125 @@ def get_banknifty_price():
     if data.empty:
         data = banknifty.history(period="5d")
     if data.empty:
-        return 55000.0
+        return None
     return round(data['Close'].iloc[-1], 2)
 
 
 def get_banknifty_volatility():
     banknifty = yf.Ticker("^NSEBANK")
     data = banknifty.history(period="1y")
+    if data.empty:
+        return None
     daily_returns = data['Close'].pct_change().dropna()
+    if daily_returns.empty or daily_returns.std() == 0:
+        return None
     annual_volatility = daily_returns.std() * np.sqrt(252)
     return round(annual_volatility, 4)
 
 
 def get_banknifty_expiry():
+    # BankNifty monthly only — last Tuesday of month
     return get_monthly_expiry()
+
+
+def get_finnifty_price():
+    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
+    data = finnifty.history(period="1d")
+    if data.empty:
+        data = finnifty.history(period="5d")
+    if data.empty:
+        return None
+    return round(data['Close'].iloc[-1], 2)
+
+
+def get_finnifty_volatility():
+    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
+    data = finnifty.history(period="1y")
+    if data.empty:
+        return get_india_vix()
+    daily_returns = data['Close'].pct_change().dropna()
+    if daily_returns.empty or daily_returns.std() == 0:
+        return get_india_vix()
+    annual_volatility = daily_returns.std() * np.sqrt(252)
+    return round(annual_volatility, 4)
+
+
+def get_finnifty_expiry():
+    # FinNifty expires last Tuesday of month (monthly only)
+    return get_monthly_expiry()
+
+
+def get_midcap_price():
+    midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
+    data = midcap.history(period="1d")
+    if data.empty:
+        data = midcap.history(period="5d")
+    if data.empty:
+        return None
+    return round(data['Close'].iloc[-1], 2)
+
+
+def get_midcap_volatility():
+    try:
+        midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
+        data = midcap.history(period="1y")
+        if data.empty or len(data) < 30:
+            return get_india_vix()
+        daily_returns = data['Close'].pct_change().dropna()
+        if daily_returns.empty or daily_returns.std() == 0:
+            return get_india_vix()
+        annual_volatility = daily_returns.std() * np.sqrt(252)
+        return round(annual_volatility, 4)
+    except:
+        return get_india_vix()
+
+
+def get_midcap_expiry():
+    # MidcapNifty expires last Tuesday of month (monthly only)
+    return get_monthly_expiry()
+
+
+def get_market_status():
+    try:
+        ist = pytz.timezone('Asia/Kolkata')
+        now = datetime.now(ist)
+        if now.weekday() >= 5:
+            return {
+                'is_open': False,
+                'status': '🔴 Market Closed',
+                'message': 'Market reopens Monday 9:15am IST',
+                'color': 'red'
+            }
+        market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        if market_open <= now <= market_close:
+            return {
+                'is_open': True,
+                'status': '🟢 Market Open',
+                'message': 'Closes at 3:30pm IST',
+                'color': 'green'
+            }
+        elif now < market_open:
+            return {
+                'is_open': False,
+                'status': '🟡 Market Opens Soon',
+                'message': 'Opens at 9:15am IST today',
+                'color': 'yellow'
+            }
+        else:
+            return {
+                'is_open': False,
+                'status': '🔴 Market Closed',
+                'message': 'Market reopens tomorrow 9:15am IST',
+                'color': 'red'
+            }
+    except:
+        return {
+            'is_open': False,
+            'status': '⚪ Market Status Unknown',
+            'message': '',
+            'color': 'gray'
+        }
 
 
 def convert_date_to_nse_format(date_str):
@@ -131,10 +241,7 @@ def get_nse_option_chain(symbol="NIFTY"):
 
 
 def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'):
-    """
-    Fetch option price from Supabase cache using REST API
-    Used as fallback when NSE direct fetch fails
-    """
+    """Fetch option price from Supabase cache"""
     try:
         import os
         SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
@@ -227,131 +334,6 @@ def get_nse_expiry_dates(symbol="NIFTY"):
         return []
 
 
-def get_nse_strikes(symbol="NIFTY", expiry_date=None):
-    """Get all available strike prices for a symbol and expiry"""
-    try:
-        chain = get_nse_option_chain(symbol)
-        if not chain:
-            return []
-        if expiry_date:
-            strikes = sorted(list(set([
-                float(e['strikePrice'].strip())
-                for e in chain
-                if e['expiryDate'] == expiry_date
-            ])))
-        else:
-            strikes = sorted(list(set([
-                float(e['strikePrice'].strip())
-                for e in chain
-            ])))
-        return strikes
-    except Exception as e:
-        print(f"NSE strikes fetch error: {e}")
-        return []
-    
-
-def get_finnifty_price():
-    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
-    data = finnifty.history(period="1d")
-    if data.empty:
-        data = finnifty.history(period="5d")
-    if data.empty:
-        return None  # return None instead of hardcoded value
-    return round(data['Close'].iloc[-1], 2)
-
-
-def get_finnifty_volatility():
-    finnifty = yf.Ticker("NIFTY_FIN_SERVICE.NS")
-    data = finnifty.history(period="1y")
-    if data.empty:
-        return None
-    daily_returns = data['Close'].pct_change().dropna()
-    annual_volatility = daily_returns.std() * np.sqrt(252)
-    return round(annual_volatility, 4)
-
-
-def get_midcap_price():
-    midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
-    data = midcap.history(period="1d")
-    if data.empty:
-        data = midcap.history(period="5d")
-    if data.empty:
-        return None
-    return round(data['Close'].iloc[-1], 2)
-
-
-def get_midcap_volatility():
-    """
-    Try to get MidcapNifty historical volatility
-    Falls back to India VIX if not enough data available
-    """
-    try:
-        midcap = yf.Ticker("NIFTY_MID_SELECT.NS")
-        data = midcap.history(period="1y")
-        if data.empty or len(data) < 30:
-            # Not enough data — use India VIX as proxy
-            return get_india_vix()
-        daily_returns = data['Close'].pct_change().dropna()
-        if daily_returns.empty or daily_returns.std() == 0:
-            return get_india_vix()
-        annual_volatility = daily_returns.std() * np.sqrt(252)
-        return round(annual_volatility, 4)
-    except:
-        return get_india_vix()
-    
-def get_market_status():
-    """
-    Check if NSE market is currently open
-    Market hours: 9:15am - 3:30pm IST, Mon-Fri
-    """
-    try:
-        import pytz
-        ist = pytz.timezone('Asia/Kolkata')
-        now = datetime.now(ist)
-
-        # Weekend check
-        if now.weekday() >= 5:
-            return {
-                'is_open': False,
-                'status': '🔴 Market Closed',
-                'message': 'Market reopens Monday 9:15am IST',
-                'color': 'red'
-            }
-
-        # Market hours check
-        market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
-        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-
-        if market_open <= now <= market_close:
-            return {
-                'is_open': True,
-                'status': '🟢 Market Open',
-                'message': f'Closes at 3:30pm IST',
-                'color': 'green'
-            }
-        elif now < market_open:
-            return {
-                'is_open': False,
-                'status': '🟡 Market Opens Soon',
-                'message': f'Opens at 9:15am IST today',
-                'color': 'yellow'
-            }
-        else:
-            return {
-                'is_open': False,
-                'status': '🔴 Market Closed',
-                'message': 'Market reopens tomorrow 9:15am IST',
-                'color': 'red'
-            }
-    except:
-        return {
-            'is_open': False,
-            'status': '⚪ Market Status Unknown',
-            'message': '',
-            'color': 'gray'
-        }
-
-
 if __name__ == "__main__":
     price = get_nifty_price()
     volatility = get_nifty_volatility()
@@ -360,7 +342,7 @@ if __name__ == "__main__":
     monthly_date, monthly_T, monthly_days = get_monthly_expiry()
 
     print(f"Current Nifty 50 Price:    ₹{price}")
-    print(f"Annual Volatility (sigma): {volatility*100:.2f}%")
+    print(f"Annual Volatility (sigma): {volatility*100:.2f}%" if volatility else "Volatility: unavailable")
     print(f"India VIX:                 {india_vix*100:.2f}%" if india_vix else "India VIX: unavailable")
     print(f"Next Weekly Expiry:  {weekly_date} ({weekly_days} days away)")
     print(f"Next Monthly Expiry: {monthly_date} ({monthly_days} days away)")
@@ -370,42 +352,19 @@ if __name__ == "__main__":
     bn_expiry, bn_T, bn_days = get_banknifty_expiry()
 
     print(f"\nBankNifty Price:      ₹{bn_price}")
-    print(f"BankNifty Volatility: {bn_vol*100:.2f}%")
+    print(f"BankNifty Volatility: {bn_vol*100:.2f}%" if bn_vol else "BankNifty Volatility: unavailable")
     print(f"BankNifty Expiry:     {bn_expiry} ({bn_days} days away)")
 
-    print("\nFetching NSE option chain...")
-    expiries = get_nse_expiry_dates("NIFTY")
-    print(f"Available expiries: {expiries}")
-
-    if expiries:
-        nearest_expiry = "07-Jul-2026"
-        call = get_nse_option_price("NIFTY", 24800, nearest_expiry, "CE")
-        put = get_nse_option_price("NIFTY", 24800, nearest_expiry, "PE")
-
-        if call:
-            print(f"\nNifty 24800 CE ({nearest_expiry}):")
-            print(f"  LTP:    ₹{call['lastPrice']}")
-            print(f"  Source: {call.get('source', 'unknown')}")
-
-        if put:
-            print(f"\nNifty 24800 PE ({nearest_expiry}):")
-            print(f"  LTP:    ₹{put['lastPrice']}")
-            print(f"  Source: {put.get('source', 'unknown')}")
-
-    print("\nTesting Supabase fallback...")
-    sb_result = get_option_price_from_supabase("NIFTY", 24800, "07-Jul-2026", "CE")
-    if sb_result:
-        print(f"Supabase result: ₹{sb_result['lastPrice']} (updated: {sb_result['updated_at'][:16]})")
-    else:
-        print("Supabase fallback failed")
-
-    # Test FinNifty and MidcapNifty
     finnifty_price = get_finnifty_price()
     finnifty_vol = get_finnifty_volatility()
     midcap_price = get_midcap_price()
     midcap_vol = get_midcap_volatility()
 
     print(f"\nFinNifty Price:      ₹{finnifty_price}")
-    print(f"FinNifty Volatility: {finnifty_vol*100:.2f}%")
+    print(f"FinNifty Volatility: {finnifty_vol*100:.2f}%" if finnifty_vol else "FinNifty Volatility: unavailable")
     print(f"MidcapNifty Price:      ₹{midcap_price}")
     print(f"MidcapNifty Volatility: {midcap_vol*100:.2f}%" if midcap_vol else "MidcapNifty Volatility: unavailable")
+
+    print("\nFetching NSE option chain...")
+    expiries = get_nse_expiry_dates("NIFTY")
+    print(f"Available expiries: {expiries}")
