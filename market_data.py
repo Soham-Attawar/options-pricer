@@ -268,13 +268,24 @@ def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'
             data = response.json()
             if data and len(data) > 0:
                 row = data[0]
+                # Convert UTC timestamp to IST for display
+                updated_utc = row['updated_at']
+                try:
+                    from datetime import timezone
+                    dt = datetime.fromisoformat(updated_utc.replace('Z', '+00:00'))
+                    ist = pytz.timezone('Asia/Kolkata')
+                    dt_ist = dt.astimezone(ist)
+                    updated_ist = dt_ist.strftime('%Y-%m-%dT%H:%M')
+                except:
+                    updated_ist = updated_utc[:16]
+
                 return {
                     'lastPrice': float(row['last_price']),
                     'openInterest': int(row['open_interest']),
                     'volume': int(row['volume']),
                     'change': float(row['change']),
                     'pchange': float(row['pchange']),
-                    'updated_at': row['updated_at'],
+                    'updated_at': updated_ist,
                     'source': 'supabase'
                 }
         return None
