@@ -343,6 +343,31 @@ def get_nse_expiry_dates(symbol="NIFTY"):
     except Exception as e:
         print(f"NSE expiry dates fetch error: {e}")
         return []
+    
+def get_rbi_rate():
+    """
+    Fetch current RBI repo rate from RBI website
+    Returns None if fetch fails
+    """
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(
+            'https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62514',
+            headers=headers,
+            timeout=10
+        )
+        if response.status_code == 200:
+            content = response.text
+            import re
+            matches = re.findall(r'repo rate.*?(\d+\.\d+)\s*per cent', content, re.IGNORECASE)
+            if matches:
+                rate = float(matches[0]) / 100
+                return round(rate, 4)
+        return None
+    except:
+        return None
 
 
 if __name__ == "__main__":

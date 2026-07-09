@@ -33,6 +33,7 @@ get_nse_option_price = market_data.get_nse_option_price
 convert_date_to_nse_format = market_data.convert_date_to_nse_format
 get_option_price_from_supabase = market_data.get_option_price_from_supabase
 get_market_status = market_data.get_market_status
+get_rbi_rate = market_data.get_rbi_rate
 get_finnifty_price = market_data.get_finnifty_price
 get_finnifty_volatility = market_data.get_finnifty_volatility
 get_finnifty_expiry = market_data.get_finnifty_expiry
@@ -111,7 +112,7 @@ if page == "🏠 Option Pricer":
         st.markdown("---")
 
         st.markdown("### 📌 Index")
-        index_choice = st.radio(
+        index_choice = st.selectbox(
             "Choose Index",
             ["Nifty 50", "BankNifty", "FinNifty", "MidcapNifty"],
             label_visibility="collapsed",
@@ -122,6 +123,7 @@ if page == "🏠 Option Pricer":
     # --- FETCH MARKET DATA ---
     with st.spinner("Fetching live data..."):
         india_vix = get_india_vix()
+        rbi_rate = get_rbi_rate()
 
         if index_choice == "Nifty 50":
             S0 = get_nifty_price()
@@ -165,10 +167,11 @@ if page == "🏠 Option Pricer":
         if S0:
             st.markdown(f"### 🏦 {index_name}")
             st.markdown(f"## ₹{S0:,.2f}")
+            rate_display = f"{rbi_rate*100:.2f}%" if rbi_rate else "N/A"
             if india_vix:
-                st.markdown(f"VIX: **{india_vix*100:.2f}%** | Rate: **6.5%**")
+                st.markdown(f"VIX: **{india_vix*100:.2f}%** | Rate: **{rate_display}**")
             else:
-                st.markdown(f"Vol: **{sigma*100:.2f}%** | Rate: **6.5%**")
+                st.markdown(f"Vol: **{sigma*100:.2f}%** | Rate: **{rate_display}**")
         else:
             st.error(f"❌ {index_name} data unavailable")
         st.markdown("---")
@@ -278,8 +281,16 @@ if page == "🏠 Option Pricer":
         )
     else:
         col2.metric("Volatility", f"{sigma*100:.2f}%" if sigma else "Unavailable")
-    col3.metric("RBI Rate", "6.5%", help="Risk-free rate used in option pricing formula")
-    col4.metric("Days to Expiry", f"{days_remaining} days", help="Trading days remaining until option expires")
+    col3.metric(
+        "RBI Rate",
+        f"{rbi_rate*100:.2f}%" if rbi_rate else "N/A",
+        help="Current RBI repo rate — used as risk-free rate in option pricing formula"
+    )
+    col4.metric(
+        "Days to Expiry",
+        f"{days_remaining} days",
+        help="Trading days remaining until option expires"
+    )
 
     st.markdown("---")
 
@@ -292,7 +303,11 @@ if page == "🏠 Option Pricer":
             nse_put = get_nse_option_price(nse_symbol, K, nse_expiry, "PE")
 
         with st.spinner("Calculating..."):
-            r = 0.065
+            if not rbi_rate:
+                st.error("❌ Unable to fetch RBI rate. Please try again.")
+                st.stop()
+
+            r = rbi_rate
             iv_call = None
             iv_put = None
             data_source = "historical"
@@ -564,6 +579,7 @@ elif page == "📊 Portfolio VaR":
 
     with st.spinner("Fetching market data..."):
         india_vix = get_india_vix()
+        rbi_rate = get_rbi_rate()
         S0_nifty = get_nifty_price()
         S0_banknifty = get_banknifty_price()
         S0_finnifty = get_finnifty_price()
@@ -655,7 +671,6 @@ elif page == "📊 Portfolio VaR":
         with col1:
             portfolio_expiry = st.radio("Expiry", ["Weekly", "Monthly"])
         with col2:
-            r = 0.065
             if portfolio_expiry == "Weekly":
                 T_portfolio = weekly_T
                 days_portfolio = weekly_days
@@ -667,13 +682,17 @@ elif page == "📊 Portfolio VaR":
             st.info(f"📅 {expiry_str} ({days_portfolio} days away)")
 
         if st.button("📊 Calculate Portfolio VaR", type="primary"):
+            if not rbi_rate:
+                st.error("❌ Unable to fetch RBI rate. Please try again.")
+                st.stop()
+
             with st.spinner("Running simulation..."):
                 portfolio_results = simulate_portfolio_pnl(
                     positions=st.session_state.positions,
                     S0=S0_nifty,
                     sigma=sigma_nifty,
                     T=T_portfolio,
-                    r=r,
+                    r=rbi_rate,
                     paths=50000
                 )
 
