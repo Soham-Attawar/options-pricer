@@ -5,6 +5,11 @@
 # --- IMPORTS ---
 import sys
 import os
+import math
+import pandas as pd
+from datetime import datetime
+from scipy.stats import norm
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import streamlit as st
@@ -40,6 +45,8 @@ get_finnifty_expiry = market_data.get_finnifty_expiry
 get_midcap_price = market_data.get_midcap_price
 get_midcap_volatility = market_data.get_midcap_volatility
 get_midcap_expiry = market_data.get_midcap_expiry
+get_all_options_from_supabase = market_data.get_all_options_from_supabase
+get_expiry_dates_from_supabase = market_data.get_expiry_dates_from_supabase
 
 import portfolio as portfolio_module
 importlib.reload(portfolio_module)
@@ -78,7 +85,7 @@ st.markdown("""
 st.markdown("""
     <div class="main-header">
         <h1>📈 Nifty Options Pricer</h1>
-        <p>Professional options pricing with live NSE data & risk analysis</p>
+        <p>Risk management tools for Indian options traders</p>
     </div>
 """, unsafe_allow_html=True)
 
@@ -94,7 +101,7 @@ else:
 # --- NAVIGATION ---
 page = st.radio(
     "Navigation",
-    ["🏠 Option Pricer", "📊 Portfolio VaR"],
+    ["🏠 Option Pricer", "📊 Portfolio VaR", "🔍 Options Screener"],
     horizontal=True,
     label_visibility="collapsed"
 )
@@ -106,7 +113,6 @@ st.markdown("---")
 # ============================================================
 if page == "🏠 Option Pricer":
 
-    # --- SIDEBAR PART 1 ---
     with st.sidebar:
         st.markdown("## ⚙️ Configure")
         st.markdown("---")
@@ -120,7 +126,6 @@ if page == "🏠 Option Pricer":
         )
         st.markdown("---")
 
-    # --- FETCH MARKET DATA ---
     with st.spinner("Fetching live data..."):
         india_vix = get_india_vix()
         rbi_rate = get_rbi_rate()
@@ -152,7 +157,7 @@ if page == "🏠 Option Pricer":
             index_name = "FinNifty"
             nse_symbol = "FINNIFTY"
             lot_size = 60
-        else:  # MidcapNifty
+        else:
             S0 = get_midcap_price()
             sigma_historical = get_midcap_volatility()
             sigma = india_vix if india_vix else sigma_historical
@@ -162,7 +167,6 @@ if page == "🏠 Option Pricer":
             nse_symbol = "MIDCPNIFTY"
             lot_size = 120
 
-    # --- SIDEBAR PART 2 ---
     with st.sidebar:
         if S0:
             st.markdown(f"### 🏦 {index_name}")
@@ -218,7 +222,7 @@ if page == "🏠 Option Pricer":
                 strike_min = 15000
                 strike_max = 40000
                 strike_step = 50
-            else:  # MidcapNifty
+            else:
                 strike_min = 8000
                 strike_max = 25000
                 strike_step = 25
@@ -357,11 +361,13 @@ if page == "🏠 Option Pricer":
 
         # --- OPTION PRICES ---
         st.markdown("### 💰 Option Prices")
+        st.caption("ℹ️ Model price difference reflects volatility assumptions — not a trading signal or recommendation.")
+
         col1, col2 = st.columns(2)
 
         with col1:
             st.markdown("#### 📗 Call Option")
-            st.caption("Profit when index goes UP")
+            st.caption("Profits when index goes UP")
             if nse_call and nse_call['lastPrice'] > 0:
                 market_price = nse_call['lastPrice']
                 theo_price = results['BS_call']
@@ -369,26 +375,26 @@ if page == "🏠 Option Pricer":
 
                 st.metric("Market Price", f"₹{market_price:.2f}",
                          help="Actual last traded price from NSE option chain")
-                st.metric("Fair Value", f"₹{theo_price:.2f}",
-                         help="Theoretical price calculated using Black-Scholes formula")
+                st.metric("Model Price", f"₹{theo_price:.2f}",
+                         help="Theoretical price calculated using Black-Scholes formula based on implied volatility")
 
                 if abs(diff) <= 3:
-                    st.success(f"✅ Fairly priced")
-                elif diff > 3:
-                    st.info(f"📉 Underpriced by ₹{diff:.2f}")
+                    st.info(f"📊 Model closely matches market (±₹{abs(diff):.2f})")
+                elif diff > 0:
+                    st.info(f"📊 Model price is ₹{diff:.2f} below market")
                 else:
-                    st.warning(f"📈 Overpriced by ₹{abs(diff):.2f}")
+                    st.info(f"📊 Model price is ₹{abs(diff):.2f} above market")
 
                 st.metric("Implied Volatility", f"{iv_call*100:.2f}%" if iv_call else "N/A",
-                         help="The volatility the market is currently pricing in for this option")
+                         help="The volatility the market is currently pricing in for this specific strike")
                 st.metric("Open Interest", f"{nse_call['openInterest']:,}",
-                         help="Number of outstanding contracts. Higher OI = more liquid")
+                         help="Number of outstanding contracts. Higher OI = more liquid and easier to trade.")
             else:
-                st.metric("Fair Value", f"₹{results['BS_call']:.2f}")
+                st.metric("Model Price", f"₹{results['BS_call']:.2f}")
 
         with col2:
             st.markdown("#### 📕 Put Option")
-            st.caption("Profit when index goes DOWN")
+            st.caption("Profits when index goes DOWN")
             if nse_put and nse_put['lastPrice'] > 0:
                 market_price_put = nse_put['lastPrice']
                 theo_price_put = results['BS_put']
@@ -396,22 +402,22 @@ if page == "🏠 Option Pricer":
 
                 st.metric("Market Price", f"₹{market_price_put:.2f}",
                          help="Actual last traded price from NSE option chain")
-                st.metric("Fair Value", f"₹{theo_price_put:.2f}",
-                         help="Theoretical price calculated using Black-Scholes formula")
+                st.metric("Model Price", f"₹{theo_price_put:.2f}",
+                         help="Theoretical price calculated using Black-Scholes formula based on implied volatility")
 
                 if abs(diff_put) <= 3:
-                    st.success(f"✅ Fairly priced")
-                elif diff_put > 3:
-                    st.info(f"📉 Underpriced by ₹{diff_put:.2f}")
+                    st.info(f"📊 Model closely matches market (±₹{abs(diff_put):.2f})")
+                elif diff_put > 0:
+                    st.info(f"📊 Model price is ₹{diff_put:.2f} below market")
                 else:
-                    st.warning(f"📈 Overpriced by ₹{abs(diff_put):.2f}")
+                    st.info(f"📊 Model price is ₹{abs(diff_put):.2f} above market")
 
                 st.metric("Implied Volatility", f"{iv_put*100:.2f}%" if iv_put else "N/A",
-                         help="Put IV is typically higher than call IV due to market skew")
+                         help="Put IV is typically higher than call IV due to market skew — traders pay more for downside protection.")
                 st.metric("Open Interest", f"{nse_put['openInterest']:,}",
-                         help="Number of outstanding contracts. Higher OI = more liquid")
+                         help="Number of outstanding contracts. Higher OI = more liquid.")
             else:
-                st.metric("Fair Value", f"₹{results['BS_put']:.2f}")
+                st.metric("Model Price", f"₹{results['BS_put']:.2f}")
 
         # --- GREEKS ---
         st.markdown("### 🔢 Greeks")
@@ -527,7 +533,7 @@ if page == "🏠 Option Pricer":
                          help="Best case scenario from 50,000 simulations")
                 profitable = (call_pnl > 0).sum() / len(call_pnl) * 100
                 st.metric("Probability of Profit", f"{profitable:.1f}%",
-                         help="What % of 50,000 simulated futures ended with this call profitable")
+                         help="What % of 50,000 simulated futures ended with this call profitable at expiry")
 
             with col2:
                 st.markdown("#### 📕 Put Risk")
@@ -537,7 +543,7 @@ if page == "🏠 Option Pricer":
                          help="Best case scenario from 50,000 simulations")
                 profitable_put = (put_pnl > 0).sum() / len(put_pnl) * 100
                 st.metric("Probability of Profit", f"{profitable_put:.1f}%",
-                         help="What % of 50,000 simulated futures ended with this put profitable")
+                         help="What % of 50,000 simulated futures ended with this put profitable at expiry")
 
             fig3, ax3 = plt.subplots(figsize=(12, 4))
             ax3.hist(nifty_returns * 100, bins=100, color='blue', alpha=0.6, edgecolor='none')
@@ -560,8 +566,8 @@ if page == "🏠 Option Pricer":
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown("#### 📊 Fair Value")
-            st.markdown("See if an option is overpriced or underpriced compared to its theoretical fair value.")
+            st.markdown("#### 📊 Model Price")
+            st.markdown("Compare the theoretical model price with the actual market price to understand how the market is pricing volatility.")
         with col2:
             st.markdown("#### ⚠️ Risk Analysis")
             st.markdown("Understand exactly how much you can lose — in rupees — before you trade.")
@@ -772,3 +778,200 @@ elif page == "📊 Portfolio VaR":
             - Buy 1 lot Nifty 24800 CE @ ₹100
             - Sell 1 lot Nifty 25000 CE @ ₹50
         """)
+
+# ============================================================
+# PAGE 3 - OPTIONS SCREENER
+# ============================================================
+elif page == "🔍 Options Screener":
+
+    st.markdown("### 🔍 Options Screener")
+    st.markdown("Scan all strikes and compare model prices with market prices across the entire option chain")
+
+    with st.spinner("Fetching market data..."):
+        india_vix = get_india_vix()
+        rbi_rate = get_rbi_rate()
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        screener_index = st.selectbox(
+            "Select Index",
+            ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+            help="Select the index to scan"
+        )
+
+    with st.spinner("Fetching expiry dates..."):
+        expiry_dates = get_expiry_dates_from_supabase(screener_index)
+
+    with col2:
+        if expiry_dates:
+            selected_expiry = st.selectbox(
+                "Select Expiry",
+                expiry_dates,
+                help="Select expiry date to scan"
+            )
+        else:
+            st.error("No expiry dates available")
+            selected_expiry = None
+
+    if st.button("🔍 Scan Options", type="primary") and selected_expiry:
+
+        with st.spinner("Scanning all strikes..."):
+            if screener_index == "NIFTY":
+                S0 = get_nifty_price()
+            elif screener_index == "BANKNIFTY":
+                S0 = get_banknifty_price()
+            elif screener_index == "FINNIFTY":
+                S0 = get_finnifty_price()
+            else:
+                S0 = get_midcap_price()
+
+            if not S0:
+                st.error("Unable to fetch index price")
+                st.stop()
+
+            if not rbi_rate:
+                st.error("Unable to fetch RBI rate")
+                st.stop()
+
+            all_options = get_all_options_from_supabase(screener_index, selected_expiry)
+
+            if not all_options:
+                st.error("No options data available for selected expiry")
+                st.stop()
+
+            expiry_dt = datetime.strptime(selected_expiry, "%d-%b-%Y")
+            today = datetime.now()
+            days_to_expiry = (expiry_dt - today).days
+            T = max(days_to_expiry / 252, 0.001)
+            r = rbi_rate
+
+            strikes_data = {}
+            for row in all_options:
+                strike = row['strike']
+                if strike not in strikes_data:
+                    strikes_data[strike] = {'CE': None, 'PE': None}
+                strikes_data[strike][row['option_type']] = row
+
+            results_list = []
+
+            for strike, options in strikes_data.items():
+                ce = options.get('CE')
+                pe = options.get('PE')
+
+                if not ce or not pe:
+                    continue
+
+                ce_price = float(ce['last_price'])
+                pe_price = float(pe['last_price'])
+
+                if ce_price <= 0 or pe_price <= 0:
+                    continue
+
+                try:
+                    iv_ce = calculate_implied_volatility(ce_price, S0, strike, T, r, 'call')
+                    iv_pe = calculate_implied_volatility(pe_price, S0, strike, T, r, 'put')
+                except:
+                    continue
+
+                sigma_avg = (iv_ce + iv_pe) / 2
+
+                try:
+                    d1 = (math.log(S0/strike) + (r + 0.5 * sigma_avg**2) * T) / (sigma_avg * math.sqrt(T))
+                    d2 = d1 - sigma_avg * math.sqrt(T)
+                    bs_call = S0 * norm.cdf(d1) - strike * math.exp(-r * T) * norm.cdf(d2)
+                    bs_put = strike * math.exp(-r * T) * norm.cdf(-d2) - S0 * norm.cdf(-d1)
+                except:
+                    continue
+
+                ce_diff = ce_price - bs_call
+                pe_diff = pe_price - bs_put
+
+                if strike < S0 * 0.99:
+                    moneyness = "ITM"
+                elif strike > S0 * 1.01:
+                    moneyness = "OTM"
+                else:
+                    moneyness = "ATM"
+
+                results_list.append({
+                    'Strike': int(strike),
+                    'Moneyness': moneyness,
+                    'Call Market': round(ce_price, 2),
+                    'Call Model': round(bs_call, 2),
+                    'Call Diff': round(ce_diff, 2),
+                    'Call IV': f"{iv_ce*100:.1f}%",
+                    'Call OI': int(ce['open_interest']),
+                    'Put Market': round(pe_price, 2),
+                    'Put Model': round(bs_put, 2),
+                    'Put Diff': round(pe_diff, 2),
+                    'Put IV': f"{iv_pe*100:.1f}%",
+                    'Put OI': int(pe['open_interest']),
+                })
+
+        if results_list:
+            st.markdown(f"### 📊 Scan Results — {screener_index} | {selected_expiry} | Spot: ₹{S0:,.2f}")
+            st.caption(f"Scanning {len(results_list)} strikes | Difference = market price minus model price | Reflects volatility assumptions only — not trading signals")
+
+            df = pd.DataFrame(results_list)
+            df = df.sort_values('Strike')
+
+            def color_diff(val):
+                if val > 3:
+                    return 'color: orange'
+                elif val < -3:
+                    return 'color: lightblue'
+                else:
+                    return 'color: white'
+
+            st.markdown("#### 📗 Call Options")
+            call_df = df[['Strike', 'Moneyness', 'Call Market', 'Call Model', 'Call Diff', 'Call IV', 'Call OI']].copy()
+            call_df.columns = ['Strike', 'Moneyness', 'Market Price', 'Model Price', 'Difference', 'IV', 'Open Interest']
+            st.dataframe(
+                call_df.style.applymap(color_diff, subset=['Difference']),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.markdown("#### 📕 Put Options")
+            put_df = df[['Strike', 'Moneyness', 'Put Market', 'Put Model', 'Put Diff', 'Put IV', 'Put OI']].copy()
+            put_df.columns = ['Strike', 'Moneyness', 'Market Price', 'Model Price', 'Difference', 'IV', 'Open Interest']
+            st.dataframe(
+                put_df.style.applymap(color_diff, subset=['Difference']),
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.markdown("### 📊 Model vs Market Summary")
+            st.caption("ℹ️ These differences reflect how the market is pricing volatility relative to the model — not buy or sell signals.")
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 📊 Calls — Market Above Model")
+                overpriced_calls = df.nlargest(3, 'Call Diff')[['Strike', 'Call Market', 'Call Model', 'Call Diff', 'Call IV']]
+                overpriced_calls.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
+                st.dataframe(overpriced_calls, use_container_width=True, hide_index=True)
+
+            with col2:
+                st.markdown("#### 📊 Calls — Market Below Model")
+                underpriced_calls = df.nsmallest(3, 'Call Diff')[['Strike', 'Call Market', 'Call Model', 'Call Diff', 'Call IV']]
+                underpriced_calls.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
+                st.dataframe(underpriced_calls, use_container_width=True, hide_index=True)
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("#### 📊 Puts — Market Above Model")
+                overpriced_puts = df.nlargest(3, 'Put Diff')[['Strike', 'Put Market', 'Put Model', 'Put Diff', 'Put IV']]
+                overpriced_puts.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
+                st.dataframe(overpriced_puts, use_container_width=True, hide_index=True)
+
+            with col2:
+                st.markdown("#### 📊 Puts — Market Below Model")
+                underpriced_puts = df.nsmallest(3, 'Put Diff')[['Strike', 'Put Market', 'Put Model', 'Put Diff', 'Put IV']]
+                underpriced_puts.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
+                st.dataframe(underpriced_puts, use_container_width=True, hide_index=True)
+
+        else:
+            st.warning("No valid options data found for selected expiry")

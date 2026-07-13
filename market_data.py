@@ -370,6 +370,77 @@ def get_rbi_rate():
         return None
 
 
+def get_all_options_from_supabase(symbol, expiry_date):
+    """
+    Fetch all option strikes for a symbol and expiry from Supabase
+    Returns list of dicts with strike, CE price, PE price
+    """
+    try:
+        import os
+        SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
+        SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O")
+
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {SUPABASE_KEY}',
+            'Content-Type': 'application/json'
+        }
+
+        params = {
+            'symbol': f'eq.{symbol}',
+            'expiry_date': f'eq.{expiry_date}',
+            'select': '*',
+            'order': 'strike.asc'
+        }
+
+        url = f"{SUPABASE_URL}/rest/v1/option_chain"
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        return []
+
+    except Exception as e:
+        print(f"Supabase fetch error: {e}")
+        return []
+
+
+def get_expiry_dates_from_supabase(symbol):
+    """
+    Fetch all available expiry dates for a symbol from Supabase
+    """
+    try:
+        import os
+        SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
+        SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O")
+
+        headers = {
+            'apikey': SUPABASE_KEY,
+            'Authorization': f'Bearer {SUPABASE_KEY}',
+            'Content-Type': 'application/json'
+        }
+
+        params = {
+            'symbol': f'eq.{symbol}',
+            'select': 'expiry_date',
+            'order': 'expiry_date.asc'
+        }
+
+        url = f"{SUPABASE_URL}/rest/v1/option_chain"
+        response = requests.get(url, headers=headers, params=params, timeout=10)
+
+        if response.status_code == 200:
+            data = response.json()
+            expiries = sorted(list(set([row['expiry_date'] for row in data])))
+            return expiries
+        return []
+
+    except Exception as e:
+        print(f"Supabase expiry fetch error: {e}")
+        return []
+
+
 if __name__ == "__main__":
     price = get_nifty_price()
     volatility = get_nifty_volatility()

@@ -1,6 +1,7 @@
 # ============================================================
 # NSE CACHE - GitHub Actions version using NseIndiaApi
 # Fetches ALL expiries and saves to Supabase
+# Includes bid/ask prices, quantities and NSE IV
 # ============================================================
 
 import requests
@@ -26,7 +27,6 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                 print(f"No data returned for {symbol}")
                 return []
 
-            # Get all available expiry dates
             expiry_dates = data['records'].get('expiryDates', [])
             print(f"Available expiries for {symbol}: {expiry_dates}")
 
@@ -46,7 +46,6 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                     records = expiry_data['records']['data']
                     print(f"  {expiry}: {len(records)} records")
 
-                    # Process each record
                     for record in records:
                         # Process CE (Call)
                         if 'CE' in record and record['CE']:
@@ -63,9 +62,15 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                                     "change": float(ce.get('change', 0)),
                                     "pchange": float(ce.get('pChange', 0)),
                                     "implied_volatility": float(ce.get('impliedVolatility', 0)),
+                                    "bid_price": float(ce.get('buyPrice1', 0)),
+                                    "ask_price": float(ce.get('sellPrice1', 0)),
+                                    "bid_qty": int(ce.get('buyQuantity1', 0)),
+                                    "ask_qty": int(ce.get('sellQuantity1', 0)),
+                                    "nse_iv": float(ce.get('impliedVolatility', 0)),
                                     "updated_at": datetime.now().isoformat()
                                 })
-                            except:
+                            except Exception as e:
+                                print(f"    Error processing CE at {ce.get('strikePrice')}: {e}")
                                 continue
 
                         # Process PE (Put)
@@ -83,9 +88,15 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                                     "change": float(pe.get('change', 0)),
                                     "pchange": float(pe.get('pChange', 0)),
                                     "implied_volatility": float(pe.get('impliedVolatility', 0)),
+                                    "bid_price": float(pe.get('buyPrice1', 0)),
+                                    "ask_price": float(pe.get('sellPrice1', 0)),
+                                    "bid_qty": int(pe.get('buyQuantity1', 0)),
+                                    "ask_qty": int(pe.get('sellQuantity1', 0)),
+                                    "nse_iv": float(pe.get('impliedVolatility', 0)),
                                     "updated_at": datetime.now().isoformat()
                                 })
-                            except:
+                            except Exception as e:
+                                print(f"    Error processing PE at {pe.get('strikePrice')}: {e}")
                                 continue
 
                 except Exception as e:
@@ -133,7 +144,9 @@ def save_to_supabase(symbol, rows):
         )
         if response.status_code == 201:
             total_inserted += len(batch)
-        print(f"Batch {i//100 + 1}: status {response.status_code}")
+        else:
+            print(f"  Batch {i//100 + 1} failed: {response.status_code} — {response.text[:100]}")
+        print(f"  Batch {i//100 + 1}: status {response.status_code}")
 
     print(f"Successfully saved {total_inserted} rows for {symbol}")
 
@@ -143,24 +156,12 @@ print(f"NSE Cache GitHub Actions — {datetime.now().strftime('%Y-%m-%d %H:%M:%S
 print(f"SUPABASE_URL: {'SET' if SUPABASE_URL else 'NOT SET'}")
 print(f"SUPABASE_KEY: {'SET' if SUPABASE_KEY else 'NOT SET'}")
 
-# Fetch and save NIFTY all expiries
-nifty_rows = get_nse_option_chain_all_expiries("NIFTY")
-if nifty_rows:
-    save_to_supabase("NIFTY", nifty_rows)
-
-# Fetch and save BANKNIFTY all expiries
-banknifty_rows = get_nse_option_chain_all_expiries("BANKNIFTY")
-if banknifty_rows:
-    save_to_supabase("BANKNIFTY", banknifty_rows)
-
-# Fetch and save FINNIFTY all expiries
-finnifty_rows = get_nse_option_chain_all_expiries("FINNIFTY")
-if finnifty_rows:
-    save_to_supabase("FINNIFTY", finnifty_rows)
-
-# Fetch and save MIDCPNIFTY all expiries
-midcap_rows = get_nse_option_chain_all_expiries("MIDCPNIFTY")
-if midcap_rows:
-    save_to_supabase("MIDCPNIFTY", midcap_rows)
+# Fetch and save all indices
+for symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
+    rows = get_nse_option_chain_all_expiries(symbol)
+    if rows:
+        save_to_supabase(symbol, rows)
+    else:
+        print(f"No data fetched for {symbol} — skipping save")
 
 print("Done!")
