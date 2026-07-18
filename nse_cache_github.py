@@ -1,13 +1,13 @@
 # ============================================================
 # NSE CACHE - GitHub Actions version using NseIndiaApi
 # Fetches ALL expiries and saves to Supabase
-# Includes bid/ask prices, quantities and NSE IV
+# Accumulates IV history in option_chain_history table
 # ============================================================
 
 import requests
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from nse import NSE
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
@@ -22,7 +22,6 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
 
         with NSE(download_folder='./', server=True, timeout=30) as nse:
 
-            # Get initial data to find all expiry dates — with retry
             data = None
             for attempt in range(3):
                 try:
@@ -41,12 +40,10 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
             expiry_dates = data['records'].get('expiryDates', [])
             print(f"Available expiries for {symbol}: {expiry_dates}")
 
-            # Fetch data for each expiry separately
             for expiry in expiry_dates:
                 try:
                     expiry_date = datetime.strptime(expiry, "%d-%b-%Y")
 
-                    # Fetch with retry
                     expiry_data = None
                     for attempt in range(3):
                         try:
@@ -92,7 +89,7 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                                     "updated_at": datetime.now().isoformat()
                                 })
                             except Exception as e:
-                                print(f"    Error processing CE at {ce.get('strikePrice')}: {e}")
+                                print(f"    Error processing CE: {e}")
                                 continue
 
                         # Process PE (Put)
@@ -118,7 +115,7 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
                                     "updated_at": datetime.now().isoformat()
                                 })
                             except Exception as e:
-                                print(f"    Error processing PE at {pe.get('strikePrice')}: {e}")
+                                print(f"    Error processing PE: {e}")
                                 continue
 
                 except Exception as e:
@@ -133,8 +130,11 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
         return []
 
 
-def save_to_supabase(symbol, rows):
-    """Save option chain to Supabase"""
+def save_to_supabase_current(symbol, rows):
+    """
+    Save to option_chain table (current snapshot)
+    Deletes old data for symbol and inserts fresh
+    """
     if not rows:
         print(f"No data to save for {symbol}")
         return
@@ -146,15 +146,15 @@ def save_to_supabase(symbol, rows):
         'Prefer': 'return=minimal'
     }
 
-    # Delete old data for this symbol
+    # Delete current data for this symbol
     delete_response = requests.delete(
         f"{SUPABASE_URL}/rest/v1/option_chain?symbol=eq.{symbol}",
         headers=headers,
         timeout=10
     )
-    print(f"Delete old data for {symbol}: status {delete_response.status_code}")
+    print(f"Cleared current data for {symbol}: status {delete_response.status_code}")
 
-    # Insert in batches of 100
+    # Insert fresh data in batches
     total_inserted = 0
     for i in range(0, len(rows), 100):
         batch = rows[i:i+100]
@@ -166,11 +166,74 @@ def save_to_supabase(symbol, rows):
         )
         if response.status_code == 201:
             total_inserted += len(batch)
-        else:
-            print(f"  Batch {i//100 + 1} failed: {response.status_code} — {response.text[:100]}")
         print(f"  Batch {i//100 + 1}: status {response.status_code}")
 
-    print(f"Successfully saved {total_inserted} rows for {symbol}")
+    print(f"Successfully saved {total_inserted} rows to option_chain for {symbol}")
+
+
+def save_to_supabase_history(symbol, rows):
+    """
+    Save to option_chain_history table (accumulates over time)
+    Never deletes — keeps building IV history for IV rank/percentile
+    Cleans up snapshots older than 30 days to manage storage
+    """
+    if not rows:
+        return
+
+    headers = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+    }
+
+    # Clean up snapshots older than 30 days
+    cutoff = (datetime.utcnow() - timedelta(days=30)).isoformat()
+    delete_response = requests.delete(
+        f"{SUPABASE_URL}/rest/v1/option_chain_history?symbol=eq.{symbol}&snapshot_time=lt.{cutoff}",
+        headers=headers,
+        timeout=10
+    )
+    print(f"Cleaned old history (>30 days) for {symbol}: status {delete_response.status_code}")
+
+    # Prepare history rows with snapshot_time
+    snapshot_time = datetime.utcnow().isoformat()
+    history_rows = []
+    for row in rows:
+        history_rows.append({
+            "symbol": row["symbol"],
+            "strike": row["strike"],
+            "expiry_date": row["expiry_date"],
+            "option_type": row["option_type"],
+            "last_price": row["last_price"],
+            "bid_price": row.get("bid_price", 0),
+            "ask_price": row.get("ask_price", 0),
+            "bid_qty": row.get("bid_qty", 0),
+            "ask_qty": row.get("ask_qty", 0),
+            "open_interest": row["open_interest"],
+            "volume": row["volume"],
+            "change": row["change"],
+            "pchange": row["pchange"],
+            "implied_volatility": row["implied_volatility"],
+            "nse_iv": row["nse_iv"],
+            "snapshot_time": snapshot_time
+        })
+
+    # Insert history in batches
+    total_inserted = 0
+    for i in range(0, len(history_rows), 100):
+        batch = history_rows[i:i+100]
+        response = requests.post(
+            f"{SUPABASE_URL}/rest/v1/option_chain_history",
+            headers=headers,
+            json=batch,
+            timeout=15
+        )
+        if response.status_code == 201:
+            total_inserted += len(batch)
+        print(f"  History batch {i//100 + 1}: status {response.status_code}")
+
+    print(f"Successfully saved {total_inserted} rows to option_chain_history for {symbol}")
 
 
 # --- MAIN ---
@@ -178,12 +241,14 @@ print(f"NSE Cache GitHub Actions — {datetime.now().strftime('%Y-%m-%d %H:%M:%S
 print(f"SUPABASE_URL: {'SET' if SUPABASE_URL else 'NOT SET'}")
 print(f"SUPABASE_KEY: {'SET' if SUPABASE_KEY else 'NOT SET'}")
 
-# Fetch and save all indices
 for symbol in ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]:
     rows = get_nse_option_chain_all_expiries(symbol)
     if rows:
-        save_to_supabase(symbol, rows)
+        # Save current snapshot (for live pricing)
+        save_to_supabase_current(symbol, rows)
+        # Save to history (for IV rank/percentile — never overwrites)
+        save_to_supabase_history(symbol, rows)
     else:
-        print(f"No data fetched for {symbol} — skipping save")
+        print(f"No data fetched for {symbol} — skipping")
 
 print("Done!")

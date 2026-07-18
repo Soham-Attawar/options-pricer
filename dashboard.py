@@ -92,7 +92,7 @@ st.markdown("""
 # --- MARKET STATUS ---
 market_status = get_market_status()
 if market_status['is_open']:
-    st.success(f"{market_status['status']} — {market_status['message']} | Prices update every 5 minutes")
+    st.success(f"{market_status['status']} — {market_status['message']} | Option chain updates every 5 minutes")
 elif market_status['color'] == 'yellow':
     st.warning(f"{market_status['status']} — {market_status['message']}")
 else:
@@ -271,29 +271,33 @@ if page == "🏠 Option Pricer":
         calculate = st.button("🚀 Calculate", type="primary", use_container_width=True)
 
     # --- LIVE MARKET DATA ---
-    st.markdown("### 📊 Live Market Data")
+    st.markdown("### 📊 Market Data")
     col1, col2, col3, col4 = st.columns(4)
     if S0:
-        col1.metric(f"{index_name}", f"₹{S0:,.2f}")
+        col1.metric(
+            f"{index_name}",
+            f"₹{S0:,.2f}",
+            help="Source: Yahoo Finance — approximately 15 minutes delayed during market hours"
+        )
     else:
         col1.metric(f"{index_name}", "Unavailable")
     if india_vix:
         col2.metric(
             "India VIX",
             f"{india_vix*100:.2f}%",
-            help="NSE's official fear index — higher VIX means options are more expensive. Above 20% = high fear."
+            help="NSE's official fear index — higher VIX means options are more expensive. Source: Yahoo Finance (~15 min delay)."
         )
     else:
         col2.metric("Volatility", f"{sigma*100:.2f}%" if sigma else "Unavailable")
     col3.metric(
         "RBI Rate",
         f"{rbi_rate*100:.2f}%" if rbi_rate else "N/A",
-        help="Current RBI repo rate — used as risk-free rate in option pricing formula"
+        help="Current RBI repo rate — fetched live from RBI website"
     )
     col4.metric(
         "Days to Expiry",
         f"{days_remaining} days",
-        help="Trading days remaining until option expires"
+        help="Calendar days remaining until option expires"
     )
 
     st.markdown("---")
@@ -302,7 +306,7 @@ if page == "🏠 Option Pricer":
 
         nse_expiry = convert_date_to_nse_format(expiry_date)
 
-        with st.spinner("Fetching NSE prices..."):
+        with st.spinner("Fetching option chain..."):
             nse_call = get_nse_option_price(nse_symbol, K, nse_expiry, "CE")
             nse_put = get_nse_option_price(nse_symbol, K, nse_expiry, "PE")
 
@@ -317,11 +321,9 @@ if page == "🏠 Option Pricer":
             data_source = "historical"
 
             if nse_call and nse_call['lastPrice'] > 0:
-                # Use NSE's own IV directly — eliminates circularity
                 if nse_call.get('nseIV') and nse_call['nseIV'] > 0:
                     iv_call = nse_call['nseIV']
                 else:
-                    # Fallback — use midpoint price for IV calculation
                     price_for_iv = nse_call.get('midPrice', nse_call['lastPrice'])
                     iv_call = calculate_implied_volatility(
                         price_for_iv, S0, K, T, r, option_type='call'
@@ -329,11 +331,9 @@ if page == "🏠 Option Pricer":
                 data_source = "live"
 
             if nse_put and nse_put['lastPrice'] > 0:
-                # Use NSE's own IV directly — eliminates circularity
                 if nse_put.get('nseIV') and nse_put['nseIV'] > 0:
                     iv_put = nse_put['nseIV']
                 else:
-                    # Fallback — use midpoint price for IV calculation
                     price_for_iv = nse_put.get('midPrice', nse_put['lastPrice'])
                     iv_put = calculate_implied_volatility(
                         price_for_iv, S0, K, T, r, option_type='put'
@@ -358,16 +358,16 @@ if page == "🏠 Option Pricer":
             else:
                 results = price_option(S0, K, T, r=r, sigma=sigma_to_use, paths=paths)
 
-        # Data source indicator
+        # Data source banner
         if data_source == "live":
             nse_source = nse_call.get('source', 'live') if nse_call else 'unknown'
             if nse_source == 'supabase':
                 updated = nse_call.get('updated_at', '')[:16] if nse_call else ''
-                st.caption(f"📡 Data last updated: {updated}")
+                st.caption(f"📡 NSE option chain (5-min delay) — last updated: {updated} IST")
             else:
-                st.caption(f"📡 Live NSE data")
+                st.caption(f"📡 NSE option chain (real-time via NseIndiaApi)")
         elif data_source == "vix":
-            st.caption(f"📡 Using India VIX ({india_vix*100:.2f}%) — live option data unavailable")
+            st.caption(f"📡 Using India VIX ({india_vix*100:.2f}%) — option chain unavailable")
         else:
             st.caption(f"📡 Using historical volatility — live data unavailable")
 
@@ -383,7 +383,6 @@ if page == "🏠 Option Pricer":
                 market_price = nse_call['lastPrice']
                 bid_price = nse_call.get('bidPrice', 0)
                 ask_price = nse_call.get('askPrice', 0)
-                mid_price = nse_call.get('midPrice', market_price)
                 data_quality = nse_call.get('dataQuality', 'good')
                 quality_notes = nse_call.get('qualityNotes', [])
 
@@ -396,25 +395,25 @@ if page == "🏠 Option Pricer":
                     st.metric(
                         "Bid / Ask",
                         f"₹{bid_price:.2f} / ₹{ask_price:.2f}",
-                        help="Current bid and ask — midpoint used for IV calculation"
+                        help="Best bid and ask — midpoint used for IV calculation when available"
                     )
                 st.metric(
-                    "Implied Volatility (NSE)",
+                    "Implied Volatility",
                     f"{iv_call*100:.2f}%" if iv_call else "N/A",
-                    help="Implied volatility from NSE — calculated directly from exchange data, not circular"
+                    help="IV from NSE exchange data for this specific strike — not a model calculation"
                 )
                 st.metric(
                     "Open Interest",
                     f"{nse_call['openInterest']:,}",
-                    help="Number of outstanding contracts. Higher OI = more liquid."
+                    help="Outstanding contracts. Higher OI = more liquid and easier to trade."
                 )
                 st.metric(
                     "Volume",
                     f"{nse_call['volume']:,}",
-                    help="Contracts traded today. Low volume may mean stale LTP."
+                    help="Contracts traded today. Very low volume may indicate stale last traded price."
                 )
                 if data_quality == "poor":
-                    st.warning(f"⚠️ Data quality concerns: {', '.join(quality_notes)}")
+                    st.warning(f"⚠️ Data quality: {', '.join(quality_notes)}")
             else:
                 st.info("No market data available for this strike")
 
@@ -425,7 +424,6 @@ if page == "🏠 Option Pricer":
                 market_price_put = nse_put['lastPrice']
                 bid_price_put = nse_put.get('bidPrice', 0)
                 ask_price_put = nse_put.get('askPrice', 0)
-                mid_price_put = nse_put.get('midPrice', market_price_put)
                 data_quality_put = nse_put.get('dataQuality', 'good')
                 quality_notes_put = nse_put.get('qualityNotes', [])
 
@@ -438,25 +436,25 @@ if page == "🏠 Option Pricer":
                     st.metric(
                         "Bid / Ask",
                         f"₹{bid_price_put:.2f} / ₹{ask_price_put:.2f}",
-                        help="Current bid and ask — midpoint used for IV calculation"
+                        help="Best bid and ask — midpoint used for IV calculation when available"
                     )
                 st.metric(
-                    "Implied Volatility (NSE)",
+                    "Implied Volatility",
                     f"{iv_put*100:.2f}%" if iv_put else "N/A",
-                    help="Put IV is typically higher than call IV due to market skew — traders pay more for downside protection."
+                    help="Put IV is typically higher than call IV (put skew) — traders pay more for downside protection."
                 )
                 st.metric(
                     "Open Interest",
                     f"{nse_put['openInterest']:,}",
-                    help="Number of outstanding contracts. Higher OI = more liquid."
+                    help="Outstanding contracts. Higher OI = more liquid."
                 )
                 st.metric(
                     "Volume",
                     f"{nse_put['volume']:,}",
-                    help="Contracts traded today. Low volume may mean stale LTP."
+                    help="Contracts traded today. Very low volume may indicate stale last traded price."
                 )
                 if data_quality_put == "poor":
-                    st.warning(f"⚠️ Data quality concerns: {', '.join(quality_notes_put)}")
+                    st.warning(f"⚠️ Data quality: {', '.join(quality_notes_put)}")
             else:
                 st.info("No market data available for this strike")
 
@@ -468,18 +466,22 @@ if page == "🏠 Option Pricer":
         col2.metric("Delta (Put)", f"{results['delta_put']:.4f}",
                    help="If index moves ₹1 up, put price changes by this amount. Range: -1 to 0.")
         col3.metric("Gamma", f"{results['gamma']:.6f}",
-                   help="How fast Delta changes when index moves ₹1.")
+                   help="How fast Delta changes when index moves ₹1. Higher = more sensitive to moves.")
         col4.metric("Theta/day", f"₹{results['theta_call']:.2f}",
-                   help="Your option loses this much value every single day just from time passing.")
+                   help="Option loses this much value every day from time passing — even if index doesn't move.")
         col5.metric("Vega (1%)", f"₹{results['vega']:.2f}",
-                   help="If market volatility increases by 1%, option price changes by this amount.")
+                   help="If volatility increases by 1%, option price changes by this amount.")
 
         st.markdown("---")
 
         # --- POSITION SIZING ---
         st.markdown("### 🎯 Position Sizing")
+        st.caption(f"Lot size: {lot_size} units | Nifty=65, BankNifty=30, FinNifty=60, MidcapNifty=120 (NSE circular Jan 2026)")
 
-        option_premium = nse_call['lastPrice'] if nse_call and nse_call['lastPrice'] > 0 else results['BS_call']
+        option_premium = nse_call['lastPrice'] if nse_call and nse_call['lastPrice'] > 0 else 0
+        if option_premium == 0:
+            option_premium = results.get('BS_call', 0)
+
         max_risk_rupees = account_size * (risk_percent / 100)
         cost_per_lot = option_premium * lot_size
         max_lots = int(max_risk_rupees / cost_per_lot) if cost_per_lot > 0 else 0
@@ -488,18 +490,21 @@ if page == "🏠 Option Pricer":
 
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Max Lots", f"{max_lots} lots",
-                   help=f"Maximum lots keeping risk at {risk_percent}% of your ₹{account_size:,} account")
+                   help=f"Maximum lots keeping risk at {risk_percent}% of ₹{account_size:,}")
         col2.metric("Total Cost", f"₹{total_cost:,.2f}",
-                   help="Total premium paid upfront to buy these contracts")
+                   help="Total premium paid upfront")
         col3.metric("Max Loss", f"₹{total_cost:,.2f}",
-                   help="The most you can ever lose — options buyers cannot lose more than premium paid")
+                   help="Option buyers cannot lose more than premium paid")
         col4.metric("Breakeven", f"₹{breakeven_price:,.2f}",
-                   help="Index must cross this price at expiry for the call to be profitable")
+                   help="Index must cross this at expiry for call to be profitable")
 
         if max_lots > 0:
             st.success(f"Buy max **{max_lots} lots** — costs ₹{total_cost:,.2f} — max loss ₹{total_cost:,.2f} ({risk_percent}% of ₹{account_size:,})")
         else:
-            st.warning(f"Need ₹{cost_per_lot:,.2f} minimum for 1 lot ({(cost_per_lot/account_size*100):.1f}% of account)")
+            if cost_per_lot > 0:
+                st.warning(f"Need ₹{cost_per_lot:,.2f} minimum for 1 lot ({(cost_per_lot/account_size*100):.1f}% of account)")
+            else:
+                st.warning("No market price available for position sizing")
 
         st.markdown("---")
 
@@ -507,7 +512,7 @@ if page == "🏠 Option Pricer":
         tab1, tab2, tab3 = st.tabs(["📈 Price Paths", "💹 Payoff Diagram", "⚠️ Risk Analysis"])
 
         with tab1:
-            st.caption("Each line = one possible future for the index based on current volatility")
+            st.caption("Each line = one possible future for the index based on current implied volatility")
             fig, ax = plt.subplots(figsize=(12, 5))
             ax.plot(results['paths'][:, :100], alpha=0.2, linewidth=0.5)
             ax.axhline(y=K, color='red', linestyle='--', linewidth=2, label=f'Strike ₹{K}')
@@ -521,10 +526,11 @@ if page == "🏠 Option Pricer":
             st.pyplot(fig)
 
         with tab2:
-            st.caption("Your exact profit or loss at every possible index price on expiry day")
+            st.caption("Profit or loss at every possible index price on expiry day")
+            put_premium_display = nse_put['lastPrice'] if nse_put and nse_put['lastPrice'] > 0 else results.get('BS_put', 0)
             nifty_range = np.linspace(S0 * 0.7, S0 * 1.3, 500)
             call_payoff = np.maximum(nifty_range - K, 0) - option_premium
-            put_payoff = np.maximum(K - nifty_range, 0) - (nse_put['lastPrice'] if nse_put and nse_put['lastPrice'] > 0 else results['BS_put'])
+            put_payoff = np.maximum(K - nifty_range, 0) - put_premium_display
 
             fig2, ax2 = plt.subplots(figsize=(12, 5))
             ax2.plot(nifty_range, call_payoff, color='green', linewidth=2, label='Call P&L')
@@ -542,7 +548,7 @@ if page == "🏠 Option Pricer":
             st.pyplot(fig2)
 
         with tab3:
-            st.caption("Risk metrics calculated from 50,000 simulated market scenarios")
+            st.caption("Risk metrics from 50,000 simulated market scenarios using per-strike implied volatility")
             nifty_returns = (results['final_prices'] - S0) / S0
             var_95 = np.percentile(nifty_returns, 5)
             var_99 = np.percentile(nifty_returns, 1)
@@ -553,39 +559,38 @@ if page == "🏠 Option Pricer":
             cvar_95_rs = abs(cvar_95 * S0)
 
             call_pnl = np.maximum(results['final_prices'] - K, 0) - option_premium
-            put_premium = nse_put['lastPrice'] if nse_put and nse_put['lastPrice'] > 0 else results['BS_put']
-            put_pnl = np.maximum(K - results['final_prices'], 0) - put_premium
+            put_pnl = np.maximum(K - results['final_prices'], 0) - put_premium_display
 
             st.markdown("#### Index Risk")
             col1, col2, col3 = st.columns(3)
             col1.metric("VaR 95%", f"₹{var_95_rs:.2f}", f"{var_95*100:.2f}%",
-                       help="With 95% confidence, the index won't fall more than this by expiry")
+                       help="95% confidence: index won't fall more than this by expiry. 1 in 20 scenarios is worse.")
             col2.metric("VaR 99%", f"₹{var_99_rs:.2f}", f"{var_99*100:.2f}%",
-                       help="Extreme scenario — only 1 in 100 simulated futures is worse than this")
+                       help="99% confidence: only 1 in 100 simulated scenarios is worse than this.")
             col3.metric("CVaR 95%", f"₹{cvar_95_rs:.2f}", f"{cvar_95*100:.2f}%",
-                       help="In the worst 5% of scenarios, this is the average loss")
+                       help="Expected loss in the worst 5% of scenarios — more conservative than VaR.")
 
             col1, col2 = st.columns(2)
 
             with col1:
                 st.markdown("#### 📗 Call Risk")
                 st.metric("Max Loss", f"₹{option_premium:.2f}",
-                         help="The most you can lose — never more than premium paid")
+                         help="Maximum you can lose — never more than premium paid")
                 st.metric("Max Profit", f"₹{call_pnl.max():.2f}",
-                         help="Best case scenario from 50,000 simulations")
+                         help="Best case from 50,000 simulations")
                 profitable = (call_pnl > 0).sum() / len(call_pnl) * 100
                 st.metric("Probability of Profit", f"{profitable:.1f}%",
-                         help="What % of 50,000 simulated futures ended with this call profitable at expiry")
+                         help="% of 50,000 simulated futures where call ended profitably at expiry")
 
             with col2:
                 st.markdown("#### 📕 Put Risk")
-                st.metric("Max Loss", f"₹{put_premium:.2f}",
-                         help="The most you can lose — never more than premium paid")
+                st.metric("Max Loss", f"₹{put_premium_display:.2f}",
+                         help="Maximum you can lose — never more than premium paid")
                 st.metric("Max Profit", f"₹{put_pnl.max():.2f}",
-                         help="Best case scenario from 50,000 simulations")
+                         help="Best case from 50,000 simulations")
                 profitable_put = (put_pnl > 0).sum() / len(put_pnl) * 100
                 st.metric("Probability of Profit", f"{profitable_put:.1f}%",
-                         help="What % of 50,000 simulated futures ended with this put profitable at expiry")
+                         help="% of 50,000 simulated futures where put ended profitably at expiry")
 
             fig3, ax3 = plt.subplots(figsize=(12, 4))
             ax3.hist(nifty_returns * 100, bins=100, color='blue', alpha=0.6, edgecolor='none')
@@ -609,13 +614,13 @@ if page == "🏠 Option Pricer":
         col1, col2, col3 = st.columns(3)
         with col1:
             st.markdown("#### 📊 IV Analysis")
-            st.markdown("See the implied volatility for any strike — directly from NSE exchange data, not a model calculation.")
+            st.markdown("Implied volatility per strike directly from NSE exchange data — not a model estimate.")
         with col2:
             st.markdown("#### ⚠️ Risk Analysis")
-            st.markdown("Understand exactly how much you can lose — in rupees — before you trade.")
+            st.markdown("VaR, CVaR and probability of profit from 50,000 Monte Carlo simulations.")
         with col3:
             st.markdown("#### 🎯 Position Sizing")
-            st.markdown("Know exactly how many lots to buy based on your account size and risk tolerance.")
+            st.markdown("Exact number of lots to buy based on your account size and risk tolerance.")
 
 # ============================================================
 # PAGE 2 - PORTFOLIO VAR
@@ -624,6 +629,7 @@ elif page == "📊 Portfolio VaR":
 
     st.markdown("### 📊 Portfolio VaR")
     st.markdown("Add your open positions to see combined risk across your entire portfolio")
+    st.caption("ℹ️ Note: All positions are simulated against a single index path. Cross-index correlation (e.g. Nifty + BankNifty) is not modelled — combined risk may be understated for mixed portfolios.")
 
     with st.spinner("Fetching market data..."):
         india_vix = get_india_vix()
@@ -637,10 +643,14 @@ elif page == "📊 Portfolio VaR":
         monthly_date, monthly_T, monthly_days = get_monthly_expiry()
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Nifty 50", f"₹{S0_nifty:,.2f}" if S0_nifty else "N/A")
-    col2.metric("BankNifty", f"₹{S0_banknifty:,.2f}" if S0_banknifty else "N/A")
-    col3.metric("FinNifty", f"₹{S0_finnifty:,.2f}" if S0_finnifty else "N/A")
-    col4.metric("MidcapNifty", f"₹{S0_midcap:,.2f}" if S0_midcap else "N/A")
+    col1.metric("Nifty 50", f"₹{S0_nifty:,.2f}" if S0_nifty else "N/A",
+               help="~15 min delayed — Yahoo Finance")
+    col2.metric("BankNifty", f"₹{S0_banknifty:,.2f}" if S0_banknifty else "N/A",
+               help="~15 min delayed — Yahoo Finance")
+    col3.metric("FinNifty", f"₹{S0_finnifty:,.2f}" if S0_finnifty else "N/A",
+               help="~15 min delayed — Yahoo Finance")
+    col4.metric("MidcapNifty", f"₹{S0_midcap:,.2f}" if S0_midcap else "N/A",
+               help="~15 min delayed — Yahoo Finance")
 
     st.markdown("---")
 
@@ -655,7 +665,7 @@ elif page == "📊 Portfolio VaR":
         pos_index = st.selectbox("Index", ["Nifty 50", "BankNifty", "FinNifty", "MidcapNifty"], key="pos_index")
     with col2:
         pos_action = st.selectbox("Action", ["Buy", "Sell"], key="pos_action",
-                                  help="Buy = paying premium | Sell = receiving premium")
+                                  help="Buy = paying premium upfront | Sell = receiving premium, taking on obligation")
     with col3:
         pos_type = st.selectbox("Type", ["Call", "Put"], key="pos_type",
                                help="Call = profits when index rises | Put = profits when index falls")
@@ -667,10 +677,11 @@ elif page == "📊 Portfolio VaR":
         pos_premium = st.number_input("Premium (₹)", min_value=0.0,
                                       max_value=10000.0, value=100.0,
                                       step=0.5, key="pos_premium",
-                                      help="Price you paid (buy) or received (sell) for this contract")
+                                      help="Price you paid (buy) or received (sell) per unit")
     with col6:
         pos_lots = st.number_input("Lots", min_value=1, max_value=100,
-                                   value=1, step=1, key="pos_lots")
+                                   value=1, step=1, key="pos_lots",
+                                   help="Number of lots (Nifty=65 units, BankNifty=30, FinNifty=60, MidcapNifty=120)")
 
     if st.button("➕ Add Position", type="secondary"):
         if pos_index == "Nifty 50":
@@ -701,7 +712,7 @@ elif page == "📊 Portfolio VaR":
             with col1:
                 action_emoji = "🟢" if pos['action'] == 'buy' else "🔴"
                 type_emoji = "📗" if pos['option_type'] == 'call' else "📕"
-                st.markdown(f"{action_emoji} {type_emoji} **{pos['action'].upper()}** {pos['lots']} lot(s) — {pos['index']} {pos['strike']} {pos['option_type'].upper()} @ ₹{pos['premium']}")
+                st.markdown(f"{action_emoji} {type_emoji} **{pos['action'].upper()}** {pos['lots']} lot(s) — {pos['index']} {pos['strike']} {pos['option_type'].upper()} @ ₹{pos['premium']} (lot size: {pos['lot_size']})")
             with col2:
                 if st.button("❌", key=f"remove_{i}"):
                     st.session_state.positions.pop(i)
@@ -717,7 +728,11 @@ elif page == "📊 Portfolio VaR":
 
         col1, col2 = st.columns(2)
         with col1:
-            portfolio_expiry = st.radio("Expiry", ["Weekly", "Monthly"])
+            portfolio_expiry = st.radio(
+                "Expiry",
+                ["Weekly", "Monthly"],
+                help="All positions will be evaluated at this expiry — mixed expiry portfolios not yet supported"
+            )
         with col2:
             if portfolio_expiry == "Weekly":
                 T_portfolio = weekly_T
@@ -734,7 +749,7 @@ elif page == "📊 Portfolio VaR":
                 st.error("❌ Unable to fetch RBI rate. Please try again.")
                 st.stop()
 
-            with st.spinner("Running simulation..."):
+            with st.spinner("Running 50,000 simulations..."):
                 portfolio_results = simulate_portfolio_pnl(
                     positions=st.session_state.positions,
                     S0=S0_nifty,
@@ -748,19 +763,19 @@ elif page == "📊 Portfolio VaR":
 
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("VaR 95%", f"₹{abs(portfolio_results['var_95']):,.2f}",
-                       help="With 95% confidence your total portfolio won't lose more than this by expiry")
+                       help="95% confidence: portfolio won't lose more than this by expiry")
             col2.metric("VaR 99%", f"₹{abs(portfolio_results['var_99']):,.2f}",
-                       help="Extreme scenario — only 1 in 100 futures is worse than this total loss")
+                       help="Only 1 in 100 simulated scenarios is worse than this")
             col3.metric("CVaR 95%", f"₹{abs(portfolio_results['cvar_95']):,.2f}",
-                       help="In the worst 5% of scenarios, this is the average total portfolio loss")
+                       help="Average loss in the worst 5% of scenarios — more conservative than VaR")
             col4.metric("Prob of Profit", f"{portfolio_results['prob_profit']:.1f}%",
-                       help="% of 50,000 simulated futures where your entire portfolio ends profitably")
+                       help="% of 50,000 simulations where portfolio ends profitably")
 
             col1, col2, col3 = st.columns(3)
             col1.metric("Max Profit", f"₹{portfolio_results['max_profit']:,.2f}",
-                       help="Best case scenario from 50,000 simulations")
+                       help="Best case from 50,000 simulations")
             col2.metric("Max Loss", f"₹{portfolio_results['max_loss']:,.2f}",
-                       help="Worst case scenario from 50,000 simulations")
+                       help="Worst case from 50,000 simulations")
             col3.metric("Expected P&L", f"₹{portfolio_results['avg_pnl']:,.2f}",
                        help="Average P&L across all 50,000 simulated futures")
 
@@ -816,9 +831,11 @@ elif page == "📊 Portfolio VaR":
     else:
         st.info("👆 Add your positions above to analyze combined portfolio risk")
         st.markdown("""
-            **Try this example:**
+            **Try this example — Bull Call Spread:**
             - Buy 1 lot Nifty 24800 CE @ ₹100
             - Sell 1 lot Nifty 25000 CE @ ₹50
+
+            Max loss = net premium paid (₹50 × 65 = ₹3,250). Portfolio VaR shows combined risk.
         """)
 
 # ============================================================
@@ -827,8 +844,8 @@ elif page == "📊 Portfolio VaR":
 elif page == "🔍 IV Analysis":
 
     st.markdown("### 🔍 IV Analysis")
-    st.markdown("Analyse implied volatility across all strikes — put-call IV divergence and data quality")
-    st.caption("ℹ️ IV divergence between calls and puts at the same strike usually reflects bid-ask spread, stale quotes on illiquid strikes, or put-call skew — not mispricing. Always check volume and OI before drawing conclusions.")
+    st.markdown("Implied volatility across all strikes — directly from NSE exchange data")
+    st.caption("ℹ️ Put-call IV divergence at the same strike usually reflects stale quotes on illiquid strikes, wide bid-ask spreads, or normal put-call skew — not a mispricing signal. Always check volume and OI before drawing conclusions.")
 
     with st.spinner("Fetching market data..."):
         india_vix = get_india_vix()
@@ -888,7 +905,6 @@ elif page == "🔍 IV Analysis":
             days_to_expiry = (expiry_dt - today).days
             T = max(days_to_expiry / 252, 0.001)
 
-            # Process options
             strikes_data = {}
             for row in all_options:
                 strike = row['strike']
@@ -912,11 +928,9 @@ elif page == "🔍 IV Analysis":
                 ce_oi = int(ce.get('open_interest', 0))
                 pe_oi = int(pe.get('open_interest', 0))
 
-                # Use NSE IV directly
                 ce_nse_iv = float(ce.get('nse_iv', 0))
                 pe_nse_iv = float(pe.get('nse_iv', 0))
 
-                # Bid/ask
                 ce_bid = float(ce.get('bid_price', 0))
                 ce_ask = float(ce.get('ask_price', 0))
                 pe_bid = float(pe.get('bid_price', 0))
@@ -925,11 +939,9 @@ elif page == "🔍 IV Analysis":
                 if ce_price <= 0 or pe_price <= 0:
                     continue
 
-                # Skip if NSE IV not available
                 if ce_nse_iv <= 0 or pe_nse_iv <= 0:
                     continue
 
-                # Data quality flags
                 ce_quality = "good"
                 pe_quality = "good"
 
@@ -942,7 +954,6 @@ elif page == "🔍 IV Analysis":
                 if pe_oi == 0:
                     pe_quality = "poor"
 
-                # Bid ask spread check
                 ce_spread_pct = ((ce_ask - ce_bid) / ce_price * 100) if ce_bid > 0 and ce_ask > 0 and ce_price > 0 else None
                 pe_spread_pct = ((pe_ask - pe_bid) / pe_price * 100) if pe_bid > 0 and pe_ask > 0 and pe_price > 0 else None
 
@@ -951,10 +962,8 @@ elif page == "🔍 IV Analysis":
                 if pe_spread_pct and pe_spread_pct > 10:
                     pe_quality = "poor"
 
-                # IV divergence — put-call IV spread at same strike
                 iv_divergence = pe_nse_iv - ce_nse_iv
 
-                # Moneyness
                 if strike < S0 * 0.99:
                     moneyness = "ITM"
                 elif strike > S0 * 1.01:
@@ -966,15 +975,11 @@ elif page == "🔍 IV Analysis":
                     'Strike': int(strike),
                     'Moneyness': moneyness,
                     'Call LTP': round(ce_price, 2),
-                    'Call Bid': round(ce_bid, 2) if ce_bid > 0 else '-',
-                    'Call Ask': round(ce_ask, 2) if ce_ask > 0 else '-',
                     'Call IV': round(ce_nse_iv, 2),
                     'Call Vol': ce_volume,
                     'Call OI': ce_oi,
                     'Call Quality': ce_quality,
                     'Put LTP': round(pe_price, 2),
-                    'Put Bid': round(pe_bid, 2) if pe_bid > 0 else '-',
-                    'Put Ask': round(pe_ask, 2) if pe_ask > 0 else '-',
                     'Put IV': round(pe_nse_iv, 2),
                     'Put Vol': pe_volume,
                     'Put OI': pe_oi,
@@ -987,36 +992,33 @@ elif page == "🔍 IV Analysis":
             df = df.sort_values('Strike')
 
             st.markdown(f"### 📊 IV Analysis — {screener_index} | {selected_expiry} | Spot: ₹{S0:,.2f}")
-            st.caption(f"Analysing {len(results_list)} strikes | NSE IV directly from exchange | Only strikes with NSE IV > 0 shown")
+            st.caption(f"Showing {len(results_list)} strikes with NSE IV > 0 | Source: NSE exchange data via 5-min snapshot")
 
-            # Summary metrics
+            # ATM summary
             atm_rows = df[df['Moneyness'] == 'ATM']
             if len(atm_rows) > 0:
                 atm = atm_rows.iloc[0]
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("ATM Strike", f"₹{atm['Strike']}")
                 col2.metric("ATM Call IV", f"{atm['Call IV']:.2f}%",
-                           help="At-the-money call implied volatility from NSE")
+                           help="At-the-money call IV from NSE")
                 col3.metric("ATM Put IV", f"{atm['Put IV']:.2f}%",
-                           help="At-the-money put implied volatility from NSE")
-                col4.metric("ATM IV Divergence", f"{atm['IV Divergence']:.2f}%",
-                           help="Put IV minus Call IV at ATM — should be near zero for liquid strikes")
+                           help="At-the-money put IV from NSE")
+                col4.metric("Put-Call IV Spread", f"{atm['IV Divergence']:.2f}%",
+                           help="Put IV minus Call IV at ATM — normal put skew is 2-5%")
 
             st.markdown("---")
 
-            # Gate the divergence signal — only show for liquid strikes
-            liquid_df = df[(df['Call Vol'] >= 100) & (df['Put Vol'] >= 100) &
-                          (df['Call OI'] > 0) & (df['Put OI'] > 0)]
-
+            # Full IV table
             st.markdown("#### 📊 Full IV Table")
 
             def color_quality(val):
                 if val == 'poor':
                     return 'color: orange'
-                return 'color: green'
+                return 'color: lightgreen'
 
             def color_divergence(val):
-                if abs(val) > 2:
+                if abs(val) > 3:
                     return 'color: orange'
                 return 'color: white'
 
@@ -1035,9 +1037,16 @@ elif page == "🔍 IV Analysis":
 
             st.markdown("---")
 
-            # Largest IV divergences — gated to liquid strikes only
-            st.markdown("#### 📊 Largest Put-Call IV Divergence (Liquid Strikes Only)")
-            st.caption("ℹ️ Large divergence on liquid strikes may reflect genuine put-call skew or temporary supply/demand imbalance — not necessarily a trading opportunity.")
+            # Liquid strikes only
+            liquid_df = df[
+                (df['Call Vol'] >= 100) &
+                (df['Put Vol'] >= 100) &
+                (df['Call OI'] > 0) &
+                (df['Put OI'] > 0)
+            ]
+
+            st.markdown("#### 📊 Put-Call IV Divergence — Liquid Strikes Only")
+            st.caption("ℹ️ Divergence on liquid strikes may reflect genuine put-call skew or temporary supply/demand — not necessarily exploitable. Check bid-ask spread before acting.")
 
             if len(liquid_df) > 0:
                 col1, col2 = st.columns(2)
@@ -1055,11 +1064,11 @@ elif page == "🔍 IV Analysis":
                     ]
                     st.dataframe(bottom_div, use_container_width=True, hide_index=True)
             else:
-                st.warning("No liquid strikes found (volume >= 100 for both call and put)")
+                st.warning("No liquid strikes found (volume ≥ 100 for both call and put)")
 
             # IV Smile chart
             st.markdown("#### 📈 IV Smile")
-            st.caption("Call IV and Put IV across strikes — the smile shape reflects market expectations")
+            st.caption("Volatility smile — shape reflects market pricing of tail risk and directional expectations")
 
             fig, ax = plt.subplots(figsize=(12, 5))
             ax.plot(df['Strike'], df['Call IV'], color='green',
@@ -1076,4 +1085,4 @@ elif page == "🔍 IV Analysis":
             st.pyplot(fig)
 
         else:
-            st.warning("No valid options data found — NSE IV may not be available for selected expiry")
+            st.warning("No valid options data found — NSE IV may be zero for this expiry (common after market close)")
