@@ -241,7 +241,11 @@ def get_nse_option_chain(symbol="NIFTY"):
 
 
 def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'):
-    """Fetch option price from Supabase cache"""
+    """
+    Fetch option price from Supabase cache
+    Uses midpoint price when bid/ask available
+    Returns NSE IV directly
+    """
     try:
         import os
         SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
@@ -268,24 +272,56 @@ def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'
             data = response.json()
             if data and len(data) > 0:
                 row = data[0]
-                # Convert UTC timestamp to IST for display
-                updated_utc = row['updated_at']
-                try:
-                    from datetime import timezone
-                    dt = datetime.fromisoformat(updated_utc.replace('Z', '+00:00'))
-                    ist = pytz.timezone('Asia/Kolkata')
-                    dt_ist = dt.astimezone(ist)
-                    updated_ist = dt_ist.strftime('%Y-%m-%dT%H:%M')
-                except:
-                    updated_ist = updated_utc[:16]
+
+                last_price = float(row['last_price'])
+                bid_price = float(row.get('bid_price', 0))
+                ask_price = float(row.get('ask_price', 0))
+                volume = int(row.get('volume', 0))
+                open_interest = int(row.get('open_interest', 0))
+                nse_iv = float(row.get('nse_iv', 0))
+
+                # Use midpoint if bid and ask are valid
+                if bid_price > 0 and ask_price > 0 and ask_price > bid_price:
+                    mid_price = (bid_price + ask_price) / 2
+
+                    # Check spread quality
+                    spread_pct = (ask_price - bid_price) / last_price * 100 if last_price > 0 else 100
+
+                    # Flag stale data
+                    data_quality = "good"
+                    quality_notes = []
+
+                    if volume < 100:
+                        data_quality = "poor"
+                        quality_notes.append("low volume")
+                    if open_interest == 0:
+                        data_quality = "poor"
+                        quality_notes.append("zero OI")
+                    if spread_pct > 10:
+                        data_quality = "poor"
+                        quality_notes.append(f"wide spread {spread_pct:.1f}%")
+
+                    price_to_use = mid_price
+                else:
+                    price_to_use = last_price
+                    spread_pct = None
+                    data_quality = "moderate"
+                    quality_notes = ["no bid/ask"]
 
                 return {
-                    'lastPrice': float(row['last_price']),
-                    'openInterest': int(row['open_interest']),
-                    'volume': int(row['volume']),
-                    'change': float(row['change']),
-                    'pchange': float(row['pchange']),
-                    'updated_at': updated_ist,
+                    'lastPrice': last_price,
+                    'midPrice': price_to_use,
+                    'bidPrice': bid_price,
+                    'askPrice': ask_price,
+                    'spreadPct': spread_pct,
+                    'openInterest': open_interest,
+                    'volume': volume,
+                    'change': float(row.get('change', 0)),
+                    'pchange': float(row.get('pchange', 0)),
+                    'nseIV': nse_iv / 100 if nse_iv > 1 else nse_iv,
+                    'dataQuality': data_quality,
+                    'qualityNotes': quality_notes,
+                    'updated_at': row['updated_at'],
                     'source': 'supabase'
                 }
         return None
@@ -299,6 +335,7 @@ def get_nse_option_price(symbol, strike, expiry_date, option_type='CE'):
     """
     Fetch real market price for a specific NSE option
     Falls back to Supabase cache if direct NSE fetch fails
+    Uses midpoint price when bid/ask available
     """
     try:
         chain = get_nse_option_chain(symbol)
@@ -314,14 +351,48 @@ def get_nse_option_price(symbol, strike, expiry_date, option_type='CE'):
             if (entry_strike == float(strike) and
                 entry_expiry == expiry_date and
                 entry_type == option_type):
+
+                last_price = float(entry['lastPrice'])
+                bid_price = float(entry.get('buyPrice1', 0))
+                ask_price = float(entry.get('sellPrice1', 0))
+                volume = int(entry.get('totalTradedVolume', 0))
+                open_interest = int(entry.get('openInterest', 0))
+                nse_iv = float(entry.get('impliedVolatility', 0))
+
+                # Use midpoint if valid
+                if bid_price > 0 and ask_price > 0 and ask_price > bid_price:
+                    mid_price = (bid_price + ask_price) / 2
+                    spread_pct = (ask_price - bid_price) / last_price * 100 if last_price > 0 else 100
+                else:
+                    mid_price = last_price
+                    spread_pct = None
+
+                # Data quality
+                data_quality = "good"
+                quality_notes = []
+                if volume < 100:
+                    data_quality = "poor"
+                    quality_notes.append("low volume")
+                if open_interest == 0:
+                    data_quality = "poor"
+                    quality_notes.append("zero OI")
+                if spread_pct and spread_pct > 10:
+                    data_quality = "poor"
+                    quality_notes.append(f"wide spread {spread_pct:.1f}%")
+
                 return {
-                    'lastPrice': entry['lastPrice'],
-                    'openInterest': entry['openInterest'],
-                    'volume': entry['totalTradedVolume'],
-                    'high': entry['highPrice'],
-                    'low': entry['lowPrice'],
-                    'change': entry['change'],
-                    'pchange': entry['pchange'],
+                    'lastPrice': last_price,
+                    'midPrice': mid_price,
+                    'bidPrice': bid_price,
+                    'askPrice': ask_price,
+                    'spreadPct': spread_pct,
+                    'openInterest': open_interest,
+                    'volume': volume,
+                    'change': float(entry.get('change', 0)),
+                    'pchange': float(entry.get('pChange', 0)),
+                    'nseIV': nse_iv / 100 if nse_iv > 1 else nse_iv,
+                    'dataQuality': data_quality,
+                    'qualityNotes': quality_notes,
                     'source': 'live'
                 }
 

@@ -6,22 +6,33 @@
 
 import requests
 import os
+import time
 from datetime import datetime
 from nse import NSE
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://mmmkqwuvzdysetroovhv.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "sb_publishable_QxjC-OlwafscoTdoOa06OQ_W6J_5H0O")
 
 
 def get_nse_option_chain_all_expiries(symbol="NIFTY"):
-    """Fetch NSE option chain for ALL expiries"""
+    """Fetch NSE option chain for ALL expiries with retry logic"""
     try:
         print(f"Fetching {symbol} from NSE using NseIndiaApi...")
         all_rows = []
 
-        with NSE(download_folder='./', server=True) as nse:
-            # Get initial data to find all expiry dates
-            data = nse.optionChain(symbol=symbol.lower())
+        with NSE(download_folder='./', server=True, timeout=30) as nse:
+
+            # Get initial data to find all expiry dates — with retry
+            data = None
+            for attempt in range(3):
+                try:
+                    data = nse.optionChain(symbol=symbol.lower())
+                    if data:
+                        break
+                except Exception as e:
+                    print(f"  Attempt {attempt+1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(5)
 
             if not data or 'records' not in data:
                 print(f"No data returned for {symbol}")
@@ -34,10 +45,21 @@ def get_nse_option_chain_all_expiries(symbol="NIFTY"):
             for expiry in expiry_dates:
                 try:
                     expiry_date = datetime.strptime(expiry, "%d-%b-%Y")
-                    expiry_data = nse.optionChain(
-                        symbol=symbol.lower(),
-                        expiry_date=expiry_date
-                    )
+
+                    # Fetch with retry
+                    expiry_data = None
+                    for attempt in range(3):
+                        try:
+                            expiry_data = nse.optionChain(
+                                symbol=symbol.lower(),
+                                expiry_date=expiry_date
+                            )
+                            if expiry_data:
+                                break
+                        except Exception as e:
+                            print(f"    Attempt {attempt+1} failed for {expiry}: {e}")
+                            if attempt < 2:
+                                time.sleep(3)
 
                     if not expiry_data or 'records' not in expiry_data:
                         print(f"  No data for {expiry}")

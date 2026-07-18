@@ -101,7 +101,7 @@ else:
 # --- NAVIGATION ---
 page = st.radio(
     "Navigation",
-    ["🏠 Option Pricer", "📊 Portfolio VaR", "🔍 Options Screener"],
+    ["🏠 Option Pricer", "📊 Portfolio VaR", "🔍 IV Analysis"],
     horizontal=True,
     label_visibility="collapsed"
 )
@@ -317,15 +317,27 @@ if page == "🏠 Option Pricer":
             data_source = "historical"
 
             if nse_call and nse_call['lastPrice'] > 0:
-                iv_call = calculate_implied_volatility(
-                    nse_call['lastPrice'], S0, K, T, r, option_type='call'
-                )
+                # Use NSE's own IV directly — eliminates circularity
+                if nse_call.get('nseIV') and nse_call['nseIV'] > 0:
+                    iv_call = nse_call['nseIV']
+                else:
+                    # Fallback — use midpoint price for IV calculation
+                    price_for_iv = nse_call.get('midPrice', nse_call['lastPrice'])
+                    iv_call = calculate_implied_volatility(
+                        price_for_iv, S0, K, T, r, option_type='call'
+                    )
                 data_source = "live"
 
             if nse_put and nse_put['lastPrice'] > 0:
-                iv_put = calculate_implied_volatility(
-                    nse_put['lastPrice'], S0, K, T, r, option_type='put'
-                )
+                # Use NSE's own IV directly — eliminates circularity
+                if nse_put.get('nseIV') and nse_put['nseIV'] > 0:
+                    iv_put = nse_put['nseIV']
+                else:
+                    # Fallback — use midpoint price for IV calculation
+                    price_for_iv = nse_put.get('midPrice', nse_put['lastPrice'])
+                    iv_put = calculate_implied_volatility(
+                        price_for_iv, S0, K, T, r, option_type='put'
+                    )
                 data_source = "live"
 
             if iv_call:
@@ -361,7 +373,6 @@ if page == "🏠 Option Pricer":
 
         # --- OPTION PRICES ---
         st.markdown("### 💰 Option Prices")
-        st.caption("ℹ️ Model price difference reflects volatility assumptions — not a trading signal or recommendation.")
 
         col1, col2 = st.columns(2)
 
@@ -370,54 +381,84 @@ if page == "🏠 Option Pricer":
             st.caption("Profits when index goes UP")
             if nse_call and nse_call['lastPrice'] > 0:
                 market_price = nse_call['lastPrice']
-                theo_price = results['BS_call']
-                diff = theo_price - market_price
+                bid_price = nse_call.get('bidPrice', 0)
+                ask_price = nse_call.get('askPrice', 0)
+                mid_price = nse_call.get('midPrice', market_price)
+                data_quality = nse_call.get('dataQuality', 'good')
+                quality_notes = nse_call.get('qualityNotes', [])
 
-                st.metric("Market Price", f"₹{market_price:.2f}",
-                         help="Actual last traded price from NSE option chain")
-                st.metric("Model Price", f"₹{theo_price:.2f}",
-                         help="Theoretical price calculated using Black-Scholes formula based on implied volatility")
-
-                if abs(diff) <= 3:
-                    st.info(f"📊 Model closely matches market (±₹{abs(diff):.2f})")
-                elif diff > 0:
-                    st.info(f"📊 Model price is ₹{diff:.2f} below market")
-                else:
-                    st.info(f"📊 Model price is ₹{abs(diff):.2f} above market")
-
-                st.metric("Implied Volatility", f"{iv_call*100:.2f}%" if iv_call else "N/A",
-                         help="The volatility the market is currently pricing in for this specific strike")
-                st.metric("Open Interest", f"{nse_call['openInterest']:,}",
-                         help="Number of outstanding contracts. Higher OI = more liquid and easier to trade.")
+                st.metric(
+                    "Last Traded Price",
+                    f"₹{market_price:.2f}",
+                    help="Last traded price from NSE option chain"
+                )
+                if bid_price > 0 and ask_price > 0:
+                    st.metric(
+                        "Bid / Ask",
+                        f"₹{bid_price:.2f} / ₹{ask_price:.2f}",
+                        help="Current bid and ask — midpoint used for IV calculation"
+                    )
+                st.metric(
+                    "Implied Volatility (NSE)",
+                    f"{iv_call*100:.2f}%" if iv_call else "N/A",
+                    help="Implied volatility from NSE — calculated directly from exchange data, not circular"
+                )
+                st.metric(
+                    "Open Interest",
+                    f"{nse_call['openInterest']:,}",
+                    help="Number of outstanding contracts. Higher OI = more liquid."
+                )
+                st.metric(
+                    "Volume",
+                    f"{nse_call['volume']:,}",
+                    help="Contracts traded today. Low volume may mean stale LTP."
+                )
+                if data_quality == "poor":
+                    st.warning(f"⚠️ Data quality concerns: {', '.join(quality_notes)}")
             else:
-                st.metric("Model Price", f"₹{results['BS_call']:.2f}")
+                st.info("No market data available for this strike")
 
         with col2:
             st.markdown("#### 📕 Put Option")
             st.caption("Profits when index goes DOWN")
             if nse_put and nse_put['lastPrice'] > 0:
                 market_price_put = nse_put['lastPrice']
-                theo_price_put = results['BS_put']
-                diff_put = theo_price_put - market_price_put
+                bid_price_put = nse_put.get('bidPrice', 0)
+                ask_price_put = nse_put.get('askPrice', 0)
+                mid_price_put = nse_put.get('midPrice', market_price_put)
+                data_quality_put = nse_put.get('dataQuality', 'good')
+                quality_notes_put = nse_put.get('qualityNotes', [])
 
-                st.metric("Market Price", f"₹{market_price_put:.2f}",
-                         help="Actual last traded price from NSE option chain")
-                st.metric("Model Price", f"₹{theo_price_put:.2f}",
-                         help="Theoretical price calculated using Black-Scholes formula based on implied volatility")
-
-                if abs(diff_put) <= 3:
-                    st.info(f"📊 Model closely matches market (±₹{abs(diff_put):.2f})")
-                elif diff_put > 0:
-                    st.info(f"📊 Model price is ₹{diff_put:.2f} below market")
-                else:
-                    st.info(f"📊 Model price is ₹{abs(diff_put):.2f} above market")
-
-                st.metric("Implied Volatility", f"{iv_put*100:.2f}%" if iv_put else "N/A",
-                         help="Put IV is typically higher than call IV due to market skew — traders pay more for downside protection.")
-                st.metric("Open Interest", f"{nse_put['openInterest']:,}",
-                         help="Number of outstanding contracts. Higher OI = more liquid.")
+                st.metric(
+                    "Last Traded Price",
+                    f"₹{market_price_put:.2f}",
+                    help="Last traded price from NSE option chain"
+                )
+                if bid_price_put > 0 and ask_price_put > 0:
+                    st.metric(
+                        "Bid / Ask",
+                        f"₹{bid_price_put:.2f} / ₹{ask_price_put:.2f}",
+                        help="Current bid and ask — midpoint used for IV calculation"
+                    )
+                st.metric(
+                    "Implied Volatility (NSE)",
+                    f"{iv_put*100:.2f}%" if iv_put else "N/A",
+                    help="Put IV is typically higher than call IV due to market skew — traders pay more for downside protection."
+                )
+                st.metric(
+                    "Open Interest",
+                    f"{nse_put['openInterest']:,}",
+                    help="Number of outstanding contracts. Higher OI = more liquid."
+                )
+                st.metric(
+                    "Volume",
+                    f"{nse_put['volume']:,}",
+                    help="Contracts traded today. Low volume may mean stale LTP."
+                )
+                if data_quality_put == "poor":
+                    st.warning(f"⚠️ Data quality concerns: {', '.join(quality_notes_put)}")
             else:
-                st.metric("Model Price", f"₹{results['BS_put']:.2f}")
+                st.info("No market data available for this strike")
 
         # --- GREEKS ---
         st.markdown("### 🔢 Greeks")
@@ -482,8 +523,8 @@ if page == "🏠 Option Pricer":
         with tab2:
             st.caption("Your exact profit or loss at every possible index price on expiry day")
             nifty_range = np.linspace(S0 * 0.7, S0 * 1.3, 500)
-            call_payoff = np.maximum(nifty_range - K, 0) - results['BS_call']
-            put_payoff = np.maximum(K - nifty_range, 0) - results['BS_put']
+            call_payoff = np.maximum(nifty_range - K, 0) - option_premium
+            put_payoff = np.maximum(K - nifty_range, 0) - (nse_put['lastPrice'] if nse_put and nse_put['lastPrice'] > 0 else results['BS_put'])
 
             fig2, ax2 = plt.subplots(figsize=(12, 5))
             ax2.plot(nifty_range, call_payoff, color='green', linewidth=2, label='Call P&L')
@@ -511,8 +552,9 @@ if page == "🏠 Option Pricer":
             var_99_rs = abs(var_99 * S0)
             cvar_95_rs = abs(cvar_95 * S0)
 
-            call_pnl = np.maximum(results['final_prices'] - K, 0) - results['BS_call']
-            put_pnl = np.maximum(K - results['final_prices'], 0) - results['BS_put']
+            call_pnl = np.maximum(results['final_prices'] - K, 0) - option_premium
+            put_premium = nse_put['lastPrice'] if nse_put and nse_put['lastPrice'] > 0 else results['BS_put']
+            put_pnl = np.maximum(K - results['final_prices'], 0) - put_premium
 
             st.markdown("#### Index Risk")
             col1, col2, col3 = st.columns(3)
@@ -527,7 +569,7 @@ if page == "🏠 Option Pricer":
 
             with col1:
                 st.markdown("#### 📗 Call Risk")
-                st.metric("Max Loss", f"₹{results['BS_call']:.2f}",
+                st.metric("Max Loss", f"₹{option_premium:.2f}",
                          help="The most you can lose — never more than premium paid")
                 st.metric("Max Profit", f"₹{call_pnl.max():.2f}",
                          help="Best case scenario from 50,000 simulations")
@@ -537,7 +579,7 @@ if page == "🏠 Option Pricer":
 
             with col2:
                 st.markdown("#### 📕 Put Risk")
-                st.metric("Max Loss", f"₹{results['BS_put']:.2f}",
+                st.metric("Max Loss", f"₹{put_premium:.2f}",
                          help="The most you can lose — never more than premium paid")
                 st.metric("Max Profit", f"₹{put_pnl.max():.2f}",
                          help="Best case scenario from 50,000 simulations")
@@ -566,8 +608,8 @@ if page == "🏠 Option Pricer":
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.markdown("#### 📊 Model Price")
-            st.markdown("Compare the theoretical model price with the actual market price to understand how the market is pricing volatility.")
+            st.markdown("#### 📊 IV Analysis")
+            st.markdown("See the implied volatility for any strike — directly from NSE exchange data, not a model calculation.")
         with col2:
             st.markdown("#### ⚠️ Risk Analysis")
             st.markdown("Understand exactly how much you can lose — in rupees — before you trade.")
@@ -780,12 +822,13 @@ elif page == "📊 Portfolio VaR":
         """)
 
 # ============================================================
-# PAGE 3 - OPTIONS SCREENER
+# PAGE 3 - IV ANALYSIS
 # ============================================================
-elif page == "🔍 Options Screener":
+elif page == "🔍 IV Analysis":
 
-    st.markdown("### 🔍 Options Screener")
-    st.markdown("Scan all strikes and compare model prices with market prices across the entire option chain")
+    st.markdown("### 🔍 IV Analysis")
+    st.markdown("Analyse implied volatility across all strikes — put-call IV divergence and data quality")
+    st.caption("ℹ️ IV divergence between calls and puts at the same strike usually reflects bid-ask spread, stale quotes on illiquid strikes, or put-call skew — not mispricing. Always check volume and OI before drawing conclusions.")
 
     with st.spinner("Fetching market data..."):
         india_vix = get_india_vix()
@@ -797,7 +840,7 @@ elif page == "🔍 Options Screener":
         screener_index = st.selectbox(
             "Select Index",
             ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
-            help="Select the index to scan"
+            help="Select the index to analyse"
         )
 
     with st.spinner("Fetching expiry dates..."):
@@ -808,15 +851,15 @@ elif page == "🔍 Options Screener":
             selected_expiry = st.selectbox(
                 "Select Expiry",
                 expiry_dates,
-                help="Select expiry date to scan"
+                help="Select expiry date to analyse"
             )
         else:
             st.error("No expiry dates available")
             selected_expiry = None
 
-    if st.button("🔍 Scan Options", type="primary") and selected_expiry:
+    if st.button("🔍 Analyse IV", type="primary") and selected_expiry:
 
-        with st.spinner("Scanning all strikes..."):
+        with st.spinner("Fetching option chain..."):
             if screener_index == "NIFTY":
                 S0 = get_nifty_price()
             elif screener_index == "BANKNIFTY":
@@ -844,8 +887,8 @@ elif page == "🔍 Options Screener":
             today = datetime.now()
             days_to_expiry = (expiry_dt - today).days
             T = max(days_to_expiry / 252, 0.001)
-            r = rbi_rate
 
+            # Process options
             strikes_data = {}
             for row in all_options:
                 strike = row['strike']
@@ -864,29 +907,54 @@ elif page == "🔍 Options Screener":
 
                 ce_price = float(ce['last_price'])
                 pe_price = float(pe['last_price'])
+                ce_volume = int(ce.get('volume', 0))
+                pe_volume = int(pe.get('volume', 0))
+                ce_oi = int(ce.get('open_interest', 0))
+                pe_oi = int(pe.get('open_interest', 0))
+
+                # Use NSE IV directly
+                ce_nse_iv = float(ce.get('nse_iv', 0))
+                pe_nse_iv = float(pe.get('nse_iv', 0))
+
+                # Bid/ask
+                ce_bid = float(ce.get('bid_price', 0))
+                ce_ask = float(ce.get('ask_price', 0))
+                pe_bid = float(pe.get('bid_price', 0))
+                pe_ask = float(pe.get('ask_price', 0))
 
                 if ce_price <= 0 or pe_price <= 0:
                     continue
 
-                try:
-                    iv_ce = calculate_implied_volatility(ce_price, S0, strike, T, r, 'call')
-                    iv_pe = calculate_implied_volatility(pe_price, S0, strike, T, r, 'put')
-                except:
+                # Skip if NSE IV not available
+                if ce_nse_iv <= 0 or pe_nse_iv <= 0:
                     continue
 
-                sigma_avg = (iv_ce + iv_pe) / 2
+                # Data quality flags
+                ce_quality = "good"
+                pe_quality = "good"
 
-                try:
-                    d1 = (math.log(S0/strike) + (r + 0.5 * sigma_avg**2) * T) / (sigma_avg * math.sqrt(T))
-                    d2 = d1 - sigma_avg * math.sqrt(T)
-                    bs_call = S0 * norm.cdf(d1) - strike * math.exp(-r * T) * norm.cdf(d2)
-                    bs_put = strike * math.exp(-r * T) * norm.cdf(-d2) - S0 * norm.cdf(-d1)
-                except:
-                    continue
+                if ce_volume < 100:
+                    ce_quality = "poor"
+                if pe_volume < 100:
+                    pe_quality = "poor"
+                if ce_oi == 0:
+                    ce_quality = "poor"
+                if pe_oi == 0:
+                    pe_quality = "poor"
 
-                ce_diff = ce_price - bs_call
-                pe_diff = pe_price - bs_put
+                # Bid ask spread check
+                ce_spread_pct = ((ce_ask - ce_bid) / ce_price * 100) if ce_bid > 0 and ce_ask > 0 and ce_price > 0 else None
+                pe_spread_pct = ((pe_ask - pe_bid) / pe_price * 100) if pe_bid > 0 and pe_ask > 0 and pe_price > 0 else None
 
+                if ce_spread_pct and ce_spread_pct > 10:
+                    ce_quality = "poor"
+                if pe_spread_pct and pe_spread_pct > 10:
+                    pe_quality = "poor"
+
+                # IV divergence — put-call IV spread at same strike
+                iv_divergence = pe_nse_iv - ce_nse_iv
+
+                # Moneyness
                 if strike < S0 * 0.99:
                     moneyness = "ITM"
                 elif strike > S0 * 1.01:
@@ -897,81 +965,115 @@ elif page == "🔍 Options Screener":
                 results_list.append({
                     'Strike': int(strike),
                     'Moneyness': moneyness,
-                    'Call Market': round(ce_price, 2),
-                    'Call Model': round(bs_call, 2),
-                    'Call Diff': round(ce_diff, 2),
-                    'Call IV': f"{iv_ce*100:.1f}%",
-                    'Call OI': int(ce['open_interest']),
-                    'Put Market': round(pe_price, 2),
-                    'Put Model': round(bs_put, 2),
-                    'Put Diff': round(pe_diff, 2),
-                    'Put IV': f"{iv_pe*100:.1f}%",
-                    'Put OI': int(pe['open_interest']),
+                    'Call LTP': round(ce_price, 2),
+                    'Call Bid': round(ce_bid, 2) if ce_bid > 0 else '-',
+                    'Call Ask': round(ce_ask, 2) if ce_ask > 0 else '-',
+                    'Call IV': round(ce_nse_iv, 2),
+                    'Call Vol': ce_volume,
+                    'Call OI': ce_oi,
+                    'Call Quality': ce_quality,
+                    'Put LTP': round(pe_price, 2),
+                    'Put Bid': round(pe_bid, 2) if pe_bid > 0 else '-',
+                    'Put Ask': round(pe_ask, 2) if pe_ask > 0 else '-',
+                    'Put IV': round(pe_nse_iv, 2),
+                    'Put Vol': pe_volume,
+                    'Put OI': pe_oi,
+                    'Put Quality': pe_quality,
+                    'IV Divergence': round(iv_divergence, 2),
                 })
 
         if results_list:
-            st.markdown(f"### 📊 Scan Results — {screener_index} | {selected_expiry} | Spot: ₹{S0:,.2f}")
-            st.caption(f"Scanning {len(results_list)} strikes | Difference = market price minus model price | Reflects volatility assumptions only — not trading signals")
-
             df = pd.DataFrame(results_list)
             df = df.sort_values('Strike')
 
-            def color_diff(val):
-                if val > 3:
+            st.markdown(f"### 📊 IV Analysis — {screener_index} | {selected_expiry} | Spot: ₹{S0:,.2f}")
+            st.caption(f"Analysing {len(results_list)} strikes | NSE IV directly from exchange | Only strikes with NSE IV > 0 shown")
+
+            # Summary metrics
+            atm_rows = df[df['Moneyness'] == 'ATM']
+            if len(atm_rows) > 0:
+                atm = atm_rows.iloc[0]
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("ATM Strike", f"₹{atm['Strike']}")
+                col2.metric("ATM Call IV", f"{atm['Call IV']:.2f}%",
+                           help="At-the-money call implied volatility from NSE")
+                col3.metric("ATM Put IV", f"{atm['Put IV']:.2f}%",
+                           help="At-the-money put implied volatility from NSE")
+                col4.metric("ATM IV Divergence", f"{atm['IV Divergence']:.2f}%",
+                           help="Put IV minus Call IV at ATM — should be near zero for liquid strikes")
+
+            st.markdown("---")
+
+            # Gate the divergence signal — only show for liquid strikes
+            liquid_df = df[(df['Call Vol'] >= 100) & (df['Put Vol'] >= 100) &
+                          (df['Call OI'] > 0) & (df['Put OI'] > 0)]
+
+            st.markdown("#### 📊 Full IV Table")
+
+            def color_quality(val):
+                if val == 'poor':
                     return 'color: orange'
-                elif val < -3:
-                    return 'color: lightblue'
-                else:
-                    return 'color: white'
+                return 'color: green'
 
-            st.markdown("#### 📗 Call Options")
-            call_df = df[['Strike', 'Moneyness', 'Call Market', 'Call Model', 'Call Diff', 'Call IV', 'Call OI']].copy()
-            call_df.columns = ['Strike', 'Moneyness', 'Market Price', 'Model Price', 'Difference', 'IV', 'Open Interest']
+            def color_divergence(val):
+                if abs(val) > 2:
+                    return 'color: orange'
+                return 'color: white'
+
+            display_df = df[['Strike', 'Moneyness', 'Call LTP', 'Call IV',
+                            'Call Vol', 'Call OI', 'Call Quality',
+                            'Put LTP', 'Put IV', 'Put Vol', 'Put OI',
+                            'Put Quality', 'IV Divergence']].copy()
+
             st.dataframe(
-                call_df.style.applymap(color_diff, subset=['Difference']),
+                display_df.style
+                .applymap(color_quality, subset=['Call Quality', 'Put Quality'])
+                .applymap(color_divergence, subset=['IV Divergence']),
                 use_container_width=True,
                 hide_index=True
             )
 
-            st.markdown("#### 📕 Put Options")
-            put_df = df[['Strike', 'Moneyness', 'Put Market', 'Put Model', 'Put Diff', 'Put IV', 'Put OI']].copy()
-            put_df.columns = ['Strike', 'Moneyness', 'Market Price', 'Model Price', 'Difference', 'IV', 'Open Interest']
-            st.dataframe(
-                put_df.style.applymap(color_diff, subset=['Difference']),
-                use_container_width=True,
-                hide_index=True
-            )
+            st.markdown("---")
 
-            st.markdown("### 📊 Model vs Market Summary")
-            st.caption("ℹ️ These differences reflect how the market is pricing volatility relative to the model — not buy or sell signals.")
+            # Largest IV divergences — gated to liquid strikes only
+            st.markdown("#### 📊 Largest Put-Call IV Divergence (Liquid Strikes Only)")
+            st.caption("ℹ️ Large divergence on liquid strikes may reflect genuine put-call skew or temporary supply/demand imbalance — not necessarily a trading opportunity.")
 
-            col1, col2 = st.columns(2)
+            if len(liquid_df) > 0:
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Highest Put IV vs Call IV**")
+                    top_div = liquid_df.nlargest(5, 'IV Divergence')[
+                        ['Strike', 'Call IV', 'Put IV', 'IV Divergence', 'Call Vol', 'Put Vol']
+                    ]
+                    st.dataframe(top_div, use_container_width=True, hide_index=True)
 
-            with col1:
-                st.markdown("#### 📊 Calls — Market Above Model")
-                overpriced_calls = df.nlargest(3, 'Call Diff')[['Strike', 'Call Market', 'Call Model', 'Call Diff', 'Call IV']]
-                overpriced_calls.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
-                st.dataframe(overpriced_calls, use_container_width=True, hide_index=True)
+                with col2:
+                    st.markdown("**Lowest Put IV vs Call IV**")
+                    bottom_div = liquid_df.nsmallest(5, 'IV Divergence')[
+                        ['Strike', 'Call IV', 'Put IV', 'IV Divergence', 'Call Vol', 'Put Vol']
+                    ]
+                    st.dataframe(bottom_div, use_container_width=True, hide_index=True)
+            else:
+                st.warning("No liquid strikes found (volume >= 100 for both call and put)")
 
-            with col2:
-                st.markdown("#### 📊 Calls — Market Below Model")
-                underpriced_calls = df.nsmallest(3, 'Call Diff')[['Strike', 'Call Market', 'Call Model', 'Call Diff', 'Call IV']]
-                underpriced_calls.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
-                st.dataframe(underpriced_calls, use_container_width=True, hide_index=True)
+            # IV Smile chart
+            st.markdown("#### 📈 IV Smile")
+            st.caption("Call IV and Put IV across strikes — the smile shape reflects market expectations")
 
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.markdown("#### 📊 Puts — Market Above Model")
-                overpriced_puts = df.nlargest(3, 'Put Diff')[['Strike', 'Put Market', 'Put Model', 'Put Diff', 'Put IV']]
-                overpriced_puts.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
-                st.dataframe(overpriced_puts, use_container_width=True, hide_index=True)
-
-            with col2:
-                st.markdown("#### 📊 Puts — Market Below Model")
-                underpriced_puts = df.nsmallest(3, 'Put Diff')[['Strike', 'Put Market', 'Put Model', 'Put Diff', 'Put IV']]
-                underpriced_puts.columns = ['Strike', 'Market', 'Model', 'Diff', 'IV']
-                st.dataframe(underpriced_puts, use_container_width=True, hide_index=True)
+            fig, ax = plt.subplots(figsize=(12, 5))
+            ax.plot(df['Strike'], df['Call IV'], color='green',
+                   linewidth=2, marker='o', markersize=3, label='Call IV')
+            ax.plot(df['Strike'], df['Put IV'], color='red',
+                   linewidth=2, marker='o', markersize=3, label='Put IV')
+            ax.axvline(x=S0, color='cyan', linewidth=1.5,
+                      linestyle='--', label=f'Spot ₹{S0:,.0f}')
+            ax.set_title(f'IV Smile — {screener_index} {selected_expiry}')
+            ax.set_xlabel('Strike Price (₹)')
+            ax.set_ylabel('Implied Volatility (%)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
 
         else:
-            st.warning("No valid options data found for selected expiry")
+            st.warning("No valid options data found — NSE IV may not be available for selected expiry")
