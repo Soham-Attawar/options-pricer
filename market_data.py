@@ -5,6 +5,7 @@
 import yfinance as yf
 import numpy as np
 import requests
+import re
 from datetime import datetime, timedelta
 import pytz
 
@@ -27,8 +28,7 @@ def get_nifty_volatility():
     daily_returns = data['Close'].pct_change().dropna()
     if daily_returns.empty or daily_returns.std() == 0:
         return None
-    annual_volatility = daily_returns.std() * np.sqrt(252)
-    return round(annual_volatility, 4)
+    return round(daily_returns.std() * np.sqrt(252), 4)
 
 
 def get_india_vix():
@@ -44,8 +44,27 @@ def get_india_vix():
         return None
 
 
+def get_rbi_rate():
+    """Fetch current RBI repo rate from RBI website"""
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+        response = requests.get(
+            'https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62514',
+            headers=headers,
+            timeout=10
+        )
+        if response.status_code == 200:
+            matches = re.findall(r'repo rate.*?(\d+\.\d+)\s*per cent', response.text, re.IGNORECASE)
+            if matches:
+                return round(float(matches[0]) / 100, 4)
+        return None
+    except:
+        return None
+
+
 def get_next_expiry():
-    # Nifty 50 weekly options expire every Tuesday (weekday 1)
     today = datetime.now()
     days_until_tuesday = (1 - today.weekday()) % 7
     if days_until_tuesday == 0:
@@ -92,12 +111,10 @@ def get_banknifty_volatility():
     daily_returns = data['Close'].pct_change().dropna()
     if daily_returns.empty or daily_returns.std() == 0:
         return None
-    annual_volatility = daily_returns.std() * np.sqrt(252)
-    return round(annual_volatility, 4)
+    return round(daily_returns.std() * np.sqrt(252), 4)
 
 
 def get_banknifty_expiry():
-    # BankNifty monthly only — last Tuesday of month
     return get_monthly_expiry()
 
 
@@ -119,12 +136,10 @@ def get_finnifty_volatility():
     daily_returns = data['Close'].pct_change().dropna()
     if daily_returns.empty or daily_returns.std() == 0:
         return get_india_vix()
-    annual_volatility = daily_returns.std() * np.sqrt(252)
-    return round(annual_volatility, 4)
+    return round(daily_returns.std() * np.sqrt(252), 4)
 
 
 def get_finnifty_expiry():
-    # FinNifty expires last Tuesday of month (monthly only)
     return get_monthly_expiry()
 
 
@@ -147,14 +162,12 @@ def get_midcap_volatility():
         daily_returns = data['Close'].pct_change().dropna()
         if daily_returns.empty or daily_returns.std() == 0:
             return get_india_vix()
-        annual_volatility = daily_returns.std() * np.sqrt(252)
-        return round(annual_volatility, 4)
+        return round(daily_returns.std() * np.sqrt(252), 4)
     except:
         return get_india_vix()
 
 
 def get_midcap_expiry():
-    # MidcapNifty expires last Tuesday of month (monthly only)
     return get_monthly_expiry()
 
 
@@ -202,13 +215,11 @@ def get_market_status():
 
 
 def convert_date_to_nse_format(date_str):
-    """Convert date from YYYY-MM-DD to DD-Mon-YYYY format"""
     date_obj = datetime.strptime(date_str, "%Y-%m-%d")
     return date_obj.strftime("%d-%b-%Y")
 
 
 def _get_nse_session():
-    """Create a session with NSE cookies"""
     session = requests.Session()
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -224,7 +235,7 @@ def _get_nse_session():
 
 
 def get_nse_option_chain(symbol="NIFTY"):
-    """Fetch full NSE option chain for a symbol"""
+    """Fetch NSE option chain using old REST API — fallback only"""
     try:
         session, headers = _get_nse_session()
         url = f'https://www.nseindia.com/api/NextApi/apiClient/GetQuoteApi?functionName=getSymbolDerivativesData&symbol={symbol}'
@@ -236,8 +247,204 @@ def get_nse_option_chain(symbol="NIFTY"):
             return None
         return data['data']
     except Exception as e:
-        print(f"NSE option chain fetch error: {e}")
+        print(f"NSE REST API error: {e}")
         return None
+
+
+def get_nse_option_chain_live(symbol="NIFTY"):
+    """
+    Fetch live NSE option chain using NseIndiaApi
+    Returns full data including bid/ask prices and NSE IV
+    """
+    try:
+        from nse import NSE
+        import time
+        with NSE(download_folder='./', server=True, timeout=30) as nse:
+            data = None
+            for attempt in range(3):
+                try:
+                    data = nse.optionChain(symbol=symbol.lower())
+                    if data:
+                        break
+                except Exception as e:
+                    print(f"  Attempt {attempt+1} failed: {e}")
+                    if attempt < 2:
+                        time.sleep(3)
+
+            if not data or 'records' not in data:
+                return None
+
+            # Flatten records into a list with CE/PE separated
+            records = data['records']['data']
+            flattened = []
+
+            for record in records:
+                expiry = record.get('expiryDates', '')
+                strike = float(record.get('strikePrice', 0))
+
+                if 'CE' in record and record['CE']:
+                    ce = record['CE']
+                    flattened.append({
+                        'strikePrice': str(strike),
+                        'expiryDate': ce.get('expiryDate', expiry).replace('-', '-'),
+                        'optionType': 'CE',
+                        'lastPrice': float(ce.get('lastPrice', 0)),
+                        'openInterest': int(ce.get('openInterest', 0)),
+                        'totalTradedVolume': int(ce.get('totalTradedVolume', 0)),
+                        'change': float(ce.get('change', 0)),
+                        'pChange': float(ce.get('pChange', 0)),
+                        'impliedVolatility': float(ce.get('impliedVolatility', 0)),
+                        'buyPrice1': float(ce.get('buyPrice1', 0)),
+                        'sellPrice1': float(ce.get('sellPrice1', 0)),
+                        'buyQuantity1': int(ce.get('buyQuantity1', 0)),
+                        'sellQuantity1': int(ce.get('sellQuantity1', 0)),
+                    })
+
+                if 'PE' in record and record['PE']:
+                    pe = record['PE']
+                    flattened.append({
+                        'strikePrice': str(strike),
+                        'expiryDate': pe.get('expiryDate', expiry).replace('-', '-'),
+                        'optionType': 'PE',
+                        'lastPrice': float(pe.get('lastPrice', 0)),
+                        'openInterest': int(pe.get('openInterest', 0)),
+                        'totalTradedVolume': int(pe.get('totalTradedVolume', 0)),
+                        'change': float(pe.get('change', 0)),
+                        'pChange': float(pe.get('pChange', 0)),
+                        'impliedVolatility': float(pe.get('impliedVolatility', 0)),
+                        'buyPrice1': float(pe.get('buyPrice1', 0)),
+                        'sellPrice1': float(pe.get('sellPrice1', 0)),
+                        'buyQuantity1': int(pe.get('buyQuantity1', 0)),
+                        'sellQuantity1': int(pe.get('sellQuantity1', 0)),
+                    })
+
+            return flattened
+
+    except Exception as e:
+        print(f"NseIndiaApi error: {e}")
+        return None
+
+
+def _process_option_entry(entry, last_price_key='lastPrice'):
+    """
+    Process a raw option entry into standardized format
+    Works for both NseIndiaApi and REST API formats
+    Uses midpoint price when bid/ask available
+    Assesses data quality
+    """
+    last_price = float(entry.get('lastPrice', entry.get('last_price', 0)))
+    bid_price = float(entry.get('buyPrice1', entry.get('bid_price', 0)))
+    ask_price = float(entry.get('sellPrice1', entry.get('ask_price', 0)))
+    volume = int(entry.get('totalTradedVolume', entry.get('volume', 0)))
+    open_interest = int(entry.get('openInterest', entry.get('open_interest', 0)))
+    nse_iv_raw = float(entry.get('impliedVolatility', entry.get('nse_iv', 0)))
+
+    # Normalize NSE IV — NSE returns it as percentage (e.g. 10.5 means 10.5%)
+    nse_iv = nse_iv_raw / 100 if nse_iv_raw > 1 else nse_iv_raw
+
+    # Use midpoint if valid
+    if bid_price > 0 and ask_price > 0 and ask_price > bid_price:
+        mid_price = (bid_price + ask_price) / 2
+        spread_pct = (ask_price - bid_price) / last_price * 100 if last_price > 0 else 100
+    else:
+        mid_price = last_price
+        spread_pct = None
+
+    # Data quality assessment
+    data_quality = "good"
+    quality_notes = []
+
+    if volume < 100:
+        data_quality = "poor"
+        quality_notes.append("low volume")
+    if open_interest == 0:
+        data_quality = "poor"
+        quality_notes.append("zero OI")
+    if spread_pct and spread_pct > 10:
+        data_quality = "poor"
+        quality_notes.append(f"wide spread {spread_pct:.1f}%")
+
+    return {
+        'lastPrice': last_price,
+        'midPrice': mid_price,
+        'bidPrice': bid_price,
+        'askPrice': ask_price,
+        'spreadPct': spread_pct,
+        'openInterest': open_interest,
+        'volume': volume,
+        'change': float(entry.get('change', 0)),
+        'pchange': float(entry.get('pChange', entry.get('pchange', 0))),
+        'nseIV': nse_iv,
+        'dataQuality': data_quality,
+        'qualityNotes': quality_notes,
+    }
+
+
+def get_nse_option_price(symbol, strike, expiry_date, option_type='CE'):
+    """
+    Fetch real market price for a specific NSE option
+    Priority: NseIndiaApi (live, has bid/ask) → REST API → Supabase cache
+    """
+    # Convert expiry_date format for matching
+    # expiry_date comes in as "28-Jul-2026"
+    # NseIndiaApi returns expiryDate as "28-07-2026" or "28-Jul-2026"
+
+    try:
+        # Try NseIndiaApi first — has bid/ask and NSE IV
+        chain = get_nse_option_chain_live(symbol)
+
+        if chain:
+            for entry in chain:
+                entry_strike = float(entry['strikePrice'])
+                entry_type = entry['optionType']
+                entry_expiry_raw = entry['expiryDate']
+
+                # Normalize expiry date format for comparison
+                try:
+                    # Try parsing as DD-MM-YYYY
+                    dt = datetime.strptime(entry_expiry_raw, "%d-%m-%Y")
+                    entry_expiry_normalized = dt.strftime("%d-%b-%Y")
+                except:
+                    try:
+                        # Try parsing as DD-Mon-YYYY
+                        dt = datetime.strptime(entry_expiry_raw, "%d-%b-%Y")
+                        entry_expiry_normalized = entry_expiry_raw
+                    except:
+                        entry_expiry_normalized = entry_expiry_raw
+
+                if (entry_strike == float(strike) and
+                    entry_expiry_normalized == expiry_date and
+                    entry_type == option_type):
+
+                    result = _process_option_entry(entry)
+                    result['source'] = 'live'
+                    return result
+
+    except Exception as e:
+        print(f"NseIndiaApi fetch failed: {e}")
+
+    # Fallback to REST API
+    try:
+        chain = get_nse_option_chain(symbol)
+        if chain:
+            for entry in chain:
+                entry_strike = float(entry['strikePrice'].strip())
+                entry_expiry = entry['expiryDate']
+                entry_type = entry['optionType']
+
+                if (entry_strike == float(strike) and
+                    entry_expiry == expiry_date and
+                    entry_type == option_type):
+
+                    result = _process_option_entry(entry)
+                    result['source'] = 'live'
+                    return result
+    except Exception as e:
+        print(f"REST API fetch failed: {e}")
+
+    # Final fallback — Supabase cache
+    print("Trying Supabase cache...")
+    return get_option_price_from_supabase(symbol, strike, expiry_date, option_type)
 
 
 def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'):
@@ -273,57 +480,32 @@ def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'
             if data and len(data) > 0:
                 row = data[0]
 
-                last_price = float(row['last_price'])
-                bid_price = float(row.get('bid_price', 0))
-                ask_price = float(row.get('ask_price', 0))
-                volume = int(row.get('volume', 0))
-                open_interest = int(row.get('open_interest', 0))
-                nse_iv = float(row.get('nse_iv', 0))
-
-                # Use midpoint if bid and ask are valid
-                if bid_price > 0 and ask_price > 0 and ask_price > bid_price:
-                    mid_price = (bid_price + ask_price) / 2
-
-                    # Check spread quality
-                    spread_pct = (ask_price - bid_price) / last_price * 100 if last_price > 0 else 100
-
-                    # Flag stale data
-                    data_quality = "good"
-                    quality_notes = []
-
-                    if volume < 100:
-                        data_quality = "poor"
-                        quality_notes.append("low volume")
-                    if open_interest == 0:
-                        data_quality = "poor"
-                        quality_notes.append("zero OI")
-                    if spread_pct > 10:
-                        data_quality = "poor"
-                        quality_notes.append(f"wide spread {spread_pct:.1f}%")
-
-                    price_to_use = mid_price
-                else:
-                    price_to_use = last_price
-                    spread_pct = None
-                    data_quality = "moderate"
-                    quality_notes = ["no bid/ask"]
-
-                return {
-                    'lastPrice': last_price,
-                    'midPrice': price_to_use,
-                    'bidPrice': bid_price,
-                    'askPrice': ask_price,
-                    'spreadPct': spread_pct,
-                    'openInterest': open_interest,
-                    'volume': volume,
+                entry = {
+                    'lastPrice': float(row['last_price']),
+                    'buyPrice1': float(row.get('bid_price', 0)),
+                    'sellPrice1': float(row.get('ask_price', 0)),
+                    'openInterest': int(row.get('open_interest', 0)),
+                    'totalTradedVolume': int(row.get('volume', 0)),
                     'change': float(row.get('change', 0)),
-                    'pchange': float(row.get('pchange', 0)),
-                    'nseIV': nse_iv / 100 if nse_iv > 1 else nse_iv,
-                    'dataQuality': data_quality,
-                    'qualityNotes': quality_notes,
-                    'updated_at': row['updated_at'],
-                    'source': 'supabase'
+                    'pChange': float(row.get('pchange', 0)),
+                    'impliedVolatility': float(row.get('nse_iv', 0)),
                 }
+
+                result = _process_option_entry(entry)
+                result['updated_at'] = row['updated_at']
+                result['source'] = 'supabase'
+
+                # Convert IST timestamp for display
+                try:
+                    updated_utc = row['updated_at']
+                    dt = datetime.fromisoformat(updated_utc.replace('Z', '+00:00'))
+                    ist = pytz.timezone('Asia/Kolkata')
+                    dt_ist = dt.astimezone(ist)
+                    result['updated_at'] = dt_ist.strftime('%Y-%m-%dT%H:%M')
+                except:
+                    result['updated_at'] = row['updated_at'][:16]
+
+                return result
         return None
 
     except Exception as e:
@@ -331,120 +513,9 @@ def get_option_price_from_supabase(symbol, strike, expiry_date, option_type='CE'
         return None
 
 
-def get_nse_option_price(symbol, strike, expiry_date, option_type='CE'):
-    """
-    Fetch real market price for a specific NSE option
-    Falls back to Supabase cache if direct NSE fetch fails
-    Uses midpoint price when bid/ask available
-    """
-    try:
-        chain = get_nse_option_chain(symbol)
-
-        if not chain:
-            raise Exception("NSE chain empty")
-
-        for entry in chain:
-            entry_strike = float(entry['strikePrice'].strip())
-            entry_expiry = entry['expiryDate']
-            entry_type = entry['optionType']
-
-            if (entry_strike == float(strike) and
-                entry_expiry == expiry_date and
-                entry_type == option_type):
-
-                last_price = float(entry['lastPrice'])
-                bid_price = float(entry.get('buyPrice1', 0))
-                ask_price = float(entry.get('sellPrice1', 0))
-                volume = int(entry.get('totalTradedVolume', 0))
-                open_interest = int(entry.get('openInterest', 0))
-                nse_iv = float(entry.get('impliedVolatility', 0))
-
-                # Use midpoint if valid
-                if bid_price > 0 and ask_price > 0 and ask_price > bid_price:
-                    mid_price = (bid_price + ask_price) / 2
-                    spread_pct = (ask_price - bid_price) / last_price * 100 if last_price > 0 else 100
-                else:
-                    mid_price = last_price
-                    spread_pct = None
-
-                # Data quality
-                data_quality = "good"
-                quality_notes = []
-                if volume < 100:
-                    data_quality = "poor"
-                    quality_notes.append("low volume")
-                if open_interest == 0:
-                    data_quality = "poor"
-                    quality_notes.append("zero OI")
-                if spread_pct and spread_pct > 10:
-                    data_quality = "poor"
-                    quality_notes.append(f"wide spread {spread_pct:.1f}%")
-
-                return {
-                    'lastPrice': last_price,
-                    'midPrice': mid_price,
-                    'bidPrice': bid_price,
-                    'askPrice': ask_price,
-                    'spreadPct': spread_pct,
-                    'openInterest': open_interest,
-                    'volume': volume,
-                    'change': float(entry.get('change', 0)),
-                    'pchange': float(entry.get('pChange', 0)),
-                    'nseIV': nse_iv / 100 if nse_iv > 1 else nse_iv,
-                    'dataQuality': data_quality,
-                    'qualityNotes': quality_notes,
-                    'source': 'live'
-                }
-
-        raise Exception("Option not found in chain")
-
-    except Exception as e:
-        print(f"NSE direct fetch failed: {e}")
-        print("Trying Supabase cache...")
-        return get_option_price_from_supabase(symbol, strike, expiry_date, option_type)
-
-
-def get_nse_expiry_dates(symbol="NIFTY"):
-    """Get all available expiry dates from NSE option chain"""
-    try:
-        chain = get_nse_option_chain(symbol)
-        if not chain:
-            return []
-        return sorted(list(set([e['expiryDate'] for e in chain])))
-    except Exception as e:
-        print(f"NSE expiry dates fetch error: {e}")
-        return []
-    
-def get_rbi_rate():
-    """
-    Fetch current RBI repo rate from RBI website
-    Returns None if fetch fails
-    """
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        response = requests.get(
-            'https://www.rbi.org.in/Scripts/BS_PressReleaseDisplay.aspx?prid=62514',
-            headers=headers,
-            timeout=10
-        )
-        if response.status_code == 200:
-            content = response.text
-            import re
-            matches = re.findall(r'repo rate.*?(\d+\.\d+)\s*per cent', content, re.IGNORECASE)
-            if matches:
-                rate = float(matches[0]) / 100
-                return round(rate, 4)
-        return None
-    except:
-        return None
-
-
 def get_all_options_from_supabase(symbol, expiry_date):
     """
     Fetch all option strikes for a symbol and expiry from Supabase
-    Returns list of dicts with strike, CE price, PE price
     """
     try:
         import os
@@ -468,8 +539,7 @@ def get_all_options_from_supabase(symbol, expiry_date):
         response = requests.get(url, headers=headers, params=params, timeout=10)
 
         if response.status_code == 200:
-            data = response.json()
-            return data
+            return response.json()
         return []
 
     except Exception as e:
@@ -516,22 +586,21 @@ if __name__ == "__main__":
     price = get_nifty_price()
     volatility = get_nifty_volatility()
     india_vix = get_india_vix()
+    rbi_rate = get_rbi_rate()
     weekly_date, weekly_T, weekly_days = get_next_expiry()
     monthly_date, monthly_T, monthly_days = get_monthly_expiry()
 
     print(f"Current Nifty 50 Price:    ₹{price}")
     print(f"Annual Volatility (sigma): {volatility*100:.2f}%" if volatility else "Volatility: unavailable")
     print(f"India VIX:                 {india_vix*100:.2f}%" if india_vix else "India VIX: unavailable")
+    print(f"RBI Rate:                  {rbi_rate*100:.2f}%" if rbi_rate else "RBI Rate: unavailable")
     print(f"Next Weekly Expiry:  {weekly_date} ({weekly_days} days away)")
     print(f"Next Monthly Expiry: {monthly_date} ({monthly_days} days away)")
 
     bn_price = get_banknifty_price()
     bn_vol = get_banknifty_volatility()
-    bn_expiry, bn_T, bn_days = get_banknifty_expiry()
-
     print(f"\nBankNifty Price:      ₹{bn_price}")
     print(f"BankNifty Volatility: {bn_vol*100:.2f}%" if bn_vol else "BankNifty Volatility: unavailable")
-    print(f"BankNifty Expiry:     {bn_expiry} ({bn_days} days away)")
 
     finnifty_price = get_finnifty_price()
     finnifty_vol = get_finnifty_volatility()
@@ -543,6 +612,29 @@ if __name__ == "__main__":
     print(f"MidcapNifty Price:      ₹{midcap_price}")
     print(f"MidcapNifty Volatility: {midcap_vol*100:.2f}%" if midcap_vol else "MidcapNifty Volatility: unavailable")
 
-    print("\nFetching NSE option chain...")
-    expiries = get_nse_expiry_dates("NIFTY")
+    print("\nTesting NSE option price fetch...")
+    expiries = get_expiry_dates_from_supabase("NIFTY")
     print(f"Available expiries: {expiries}")
+
+    if expiries:
+        test_expiry = expiries[0]
+        call = get_nse_option_price("NIFTY", 24800, test_expiry, "CE")
+        put = get_nse_option_price("NIFTY", 24800, test_expiry, "PE")
+
+        if call:
+            print(f"\nNifty 24800 CE ({test_expiry}):")
+            print(f"  LTP:     ₹{call['lastPrice']}")
+            print(f"  Mid:     ₹{call['midPrice']:.2f}")
+            print(f"  Bid/Ask: ₹{call['bidPrice']} / ₹{call['askPrice']}")
+            print(f"  NSE IV:  {call['nseIV']*100:.2f}%")
+            print(f"  Quality: {call['dataQuality']}")
+            print(f"  Source:  {call['source']}")
+
+        if put:
+            print(f"\nNifty 24800 PE ({test_expiry}):")
+            print(f"  LTP:     ₹{put['lastPrice']}")
+            print(f"  Mid:     ₹{put['midPrice']:.2f}")
+            print(f"  Bid/Ask: ₹{put['bidPrice']} / ₹{put['askPrice']}")
+            print(f"  NSE IV:  {put['nseIV']*100:.2f}%")
+            print(f"  Quality: {put['dataQuality']}")
+            print(f"  Source:  {put['source']}")
